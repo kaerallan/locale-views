@@ -22,6 +22,7 @@
     stepWatch: $("stepWatch"), townName: $("townName"), changeTown: $("changeTown"),
     progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"),
     counted: $("countedLine"),
+    howTo: $("howTo"),
   };
 
   el.title.textContent = CFG.TITLE || "Watch our video";
@@ -89,6 +90,8 @@
     refreshTownButton();
     el.stepTown.classList.remove("hidden");
     setStatus("Press play to start. Your view counts once you've watched for " + fmtDuration(required()) + ".");
+    for (const n of el.howTo.querySelectorAll(".need")) n.textContent = fmtDuration(required());
+    el.howTo.classList.remove("hidden");
 
     resumePendingFinish();
   }
@@ -206,9 +209,26 @@
     el.progressFill.style.width = (100 * shown / req).toFixed(1) + "%";
   }
 
+  // ---------- keep the screen awake while the video plays (where the browser allows it) ----------
+  let wakeLock = null, wakeBusy = false;
+  async function keepAwake(want) {
+    if (!("wakeLock" in navigator) || wakeBusy) return;
+    wakeBusy = true;
+    try {
+      if (want && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      } else if (!want && wakeLock) {
+        const w = wakeLock; wakeLock = null; await w.release();
+      }
+    } catch (e) { wakeLock = null; }   // denied (e.g. battery saver): nothing else to do
+    wakeBusy = false;
+  }
+
   function tick() {
     accrue();
     renderProgress();
+    keepAwake(isPlaying() && document.visibilityState === "visible");
     if (state === "idle" && isPlaying() && document.visibilityState === "visible" &&
         Date.now() >= nextStartAt && !el.stepWatch.classList.contains("hidden")) {
       startView();

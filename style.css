@@ -202,3 +202,13 @@ button.link {
 }
 .chip:hover { border-color: var(--accent); }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- How-to box ---------- */
+.howto h2 { font-size: 17px; margin: 0 0 10px; }
+.howto ol { margin: 0; padding-left: 22px; }
+.howto li { margin: 0 0 8px; font-size: 15px; color: var(--text); }
+.howto li:last-child { margin-bottom: 0; }
+.howto li::marker { color: var(--accent); font-weight: 700; }
+@media (min-width: 900px) {
+  .howto { max-width: 760px; padding: 22px 24px; }
+}
