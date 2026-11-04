@@ -21,7 +21,7 @@
     recentWrap: $("recentWrap"), recentList: $("recentList"),
     stepWatch: $("stepWatch"), townName: $("townName"), changeTown: $("changeTown"),
     progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"),
-    counted: $("countedLine"),
+    counted: $("countedLine"), restart: $("restartBtn"),
     howTo: $("howTo"),
   };
 
@@ -90,8 +90,11 @@
     refreshTownButton();
     el.stepTown.classList.remove("hidden");
     setStatus("Press play to start. Your view counts once you've watched for " + fmtDuration(required()) + ".");
-    for (const n of el.howTo.querySelectorAll(".need")) n.textContent = fmtDuration(required());
-    el.howTo.classList.remove("hidden");
+    // (Optional elements are guarded: a phone may briefly have an older cached page.)
+    if (el.howTo) {
+      for (const n of el.howTo.querySelectorAll(".need")) n.textContent = fmtDuration(required());
+      el.howTo.classList.remove("hidden");
+    }
 
     resumePendingFinish();
   }
@@ -109,6 +112,7 @@
     store.set(K.recent, [t].concat(getRecent().filter(x => x !== t)).slice(0, RECENT_MAX));
   }
   function renderRecent() {
+    if (!el.recentList || !el.recentWrap) return;
     const list = getRecent();
     el.recentList.innerHTML = "";
     for (const t of list) {
@@ -180,17 +184,19 @@
   // Credits how much of the VIDEO actually played since the last mark — never more than the
   // real time that passed (so 2x speed doesn't count double), and nothing for stalls,
   // stutter, ads or seeking (a forward jump bigger than playback could explain is ignored).
-  // Called on every tick AND on every play/pause/visibility change.
+  // Called on every tick AND on every play/pause/buffer/end/visibility change. The player's
+  // position is read even when it has just paused/ended, so the last stretch before a
+  // pause, a stall or the end of the video is never lost.
   let lastMedia = null;
   function accrue() {
     const now = performance.now();
-    const t = isPlaying() ? mediaTime() : null;
+    const t = mediaTime();
     if (lastMark !== null && lastMedia !== null && t !== null) {
       const wall = (now - lastMark) / 1000;
       const media = t - lastMedia;
       const rate = (player.getPlaybackRate && player.getPlaybackRate()) || 1;
       if (media > 0 && media <= wall * Math.max(rate, 1) + 1.5) {
-        watched += Math.min(media, wall, 2);
+        watched += Math.min(media, wall);
       }
     }
     if (isCounting() && t !== null) { lastMark = now; lastMedia = t; }
@@ -202,7 +208,30 @@
     return sec % 60 === 0 ? (sec / 60) + (sec === 60 ? " minute" : " minutes") : sec + " seconds";
   }
 
+  // "Watch again from the start": jump to 0:00 and begin a fresh view.
+  let videoEnded = false;
+  function updateRestart() {
+    if (!el.restart) return;
+    const after = countedHere > 0 || videoEnded;
+    el.restart.classList.toggle("hidden", !(after || watched >= 5));
+    el.restart.textContent = after ? "↻ Watch again from the start" : "↻ Start over from the beginning";
+    el.restart.classList.toggle("emph", after);
+  }
+  if (el.restart) el.restart.addEventListener("click", () => {
+    if (!player || !player.seekTo) return;
+    accrue();
+    // A view that is being saved stays saved; anything partial starts over.
+    if (state === "idle" || state === "starting" || state === "active") resetView();
+    videoEnded = false;
+    player.seekTo(0, true);
+    player.playVideo();
+    lastMark = null; lastMedia = null;
+    setStatus("Starting fresh from the beginning. Your view counts once you've watched for " + fmtDuration(required()) + ".");
+    updateRestart();
+  });
+
   function renderProgress() {
+    updateRestart();
     const req = required();
     const shown = state === "done" ? req : Math.min(watched, req);
     el.progressText.textContent = fmtTime(shown) + " / " + fmtTime(req);
@@ -240,6 +269,9 @@
   async function startView() {
     state = "starting";
     const myGen = gen;
+    // Remember where the video was when we asked, so the time spent waiting for the
+    // server still counts (the server enforces its own minimum independently).
+    const askedAt = performance.now(), askedMedia = mediaTime();
     setStatus("Getting things ready…");
     try {
       const res = await api("POST", { action: "start", town, device: deviceId });
@@ -252,14 +284,20 @@
       sessionTown = res.town;
       watched = 0;
       state = "active";
-      lastMark = null;
+      // Credit playback that happened while the request was in flight (if it was
+      // continuous playback; accrue() ignores seeks and pauses as usual).
+      if (askedMedia !== null && document.visibilityState === "visible") {
+        lastMark = askedAt; lastMedia = askedMedia;
+      } else {
+        lastMark = null; lastMedia = null;
+      }
       accrue();
       setStatus("You're watching. Keep it playing to get your view counted.");
     } catch (err) {
       console.warn("Start failed:", err);
       if (myGen !== gen || state !== "starting") return;
       state = "idle";
-      nextStartAt = Date.now() + 8000;
+      nextStartAt = Date.now() + 3000;
       setStatus("We're having trouble connecting. Trying again in a moment.");
     }
   }
@@ -287,9 +325,9 @@
     if (res.ok) {
       removePending(ticket);
       countedHere++;
-      el.counted.textContent = "✓ " + countedHere + (countedHere === 1 ? " view" : " views") +
+      if (el.counted) el.counted.textContent = "✓ " + countedHere + (countedHere === 1 ? " view" : " views") +
         " counted for " + res.town + " on this visit. Thank you!";
-      el.counted.classList.remove("hidden");
+      if (el.counted) el.counted.classList.remove("hidden");
       // The next view starts right away: every further full stretch counts again.
       resetView();
       setStatus("Keep watching if you like. Every extra " + fmtDuration(required()) + " counts as another view.");
@@ -378,6 +416,8 @@
               : "The video couldn't load. Please refresh the page.");
           },
           onStateChange: e => {
+            if (e.data === YT.PlayerState.ENDED) videoEnded = true;
+            else if (e.data === YT.PlayerState.PLAYING) videoEnded = false;
             if (e.data === YT.PlayerState.ENDED && state === "done") {
               resetView();             // replaying after the end starts a fresh view
               setStatus("Press play to watch again. It counts as another view.");

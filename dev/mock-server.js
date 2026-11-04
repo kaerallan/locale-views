@@ -79,7 +79,7 @@ const sandbox = {
 };
 
 let code = fs.readFileSync(path.join(ROOT, "apps-script", "Code.gs"), "utf8");
-if (process.env.MIN_SECONDS) code = code.replace(/const MIN_SECONDS = \d+;/, "const MIN_SECONDS = " + Number(process.env.MIN_SECONDS) + ";");
+if (process.env.MIN_SECONDS) code = code.replace(/const MIN_SECONDS = [^;]+;/, "const MIN_SECONDS = " + Number(process.env.MIN_SECONDS) + ";");
 vm.createContext(sandbox);
 vm.runInContext(code, sandbox, { filename: "Code.gs" });
 vm.runInContext("setup()", sandbox);

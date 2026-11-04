@@ -6,7 +6,8 @@
  *   2. At least MIN_SECONDS of real time passed on the SERVER's clock between
  *      "start" and "finish" — the browser's own timer is never trusted.
  *   3. The view's ticket is signed by this server and can be used only once.
- *   4. Only the newest view per device can finish (no stacking tabs).
+ *   4. One device can't earn two views at the same time (no stacking tabs): two counted
+ *      views from one device must start at least MIN_SECONDS apart.
  *
  * Setup (see README.md for the full walkthrough):
  *   - Run setup() once from the editor.
@@ -107,8 +108,6 @@ function start_(data) {
   if (device.length < 8) return json_({ ok: false, error: 'bad device id' });
   const sid = Utilities.getUuid();
   const payload = { s: sid, t: town, v: VIDEO_ID, d: device, at: Date.now() };
-  // Newest view wins for this device: older unfinished views from it can no longer finish.
-  CacheService.getScriptCache().put('dev_' + device, sid, 21600);
   return json_({ ok: true, session: sign_(payload), town: town, minSeconds: MIN_SECONDS });
 }
 
@@ -132,11 +131,6 @@ function finish_(data) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return json_({ ok: false, error: 'busy', retry: true });
   try {
-    // Fast path: a newer view was started on this device (cache can be evicted, so
-    // the durable check below is what actually guarantees the rule).
-    const latest = cache.get('dev_' + p.d);
-    if (latest && latest !== p.s) return json_({ ok: false, error: 'replaced by a newer view on this device' });
-
     // Durable checks against the sheet itself. Tickets expire after SESSION_MAX_AGE_MS,
     // so only rows newer than that can matter; rows are in time order, so scan from the
     // bottom in chunks and stop at the first older row.
@@ -146,7 +140,7 @@ function finish_(data) {
     scan:
     while (end > 1) {
       const start = Math.max(2, end - 499);
-      const rows = sheet.getRange(start, 1, end - start + 1, 5).getValues(); // A:E
+      const rows = sheet.getRange(start, 1, end - start + 1, 6).getValues(); // A:F
       for (let i = rows.length - 1; i >= 0; i--) {
         const ts = rows[i][0] instanceof Date ? rows[i][0].getTime() : Number(new Date(rows[i][0]));
         if (ts < cutoff) break scan;
@@ -154,9 +148,14 @@ function finish_(data) {
           cache.put('used_' + p.s, '1', 21600);
           return json_({ ok: true, duplicate: true, town: p.t });
         }
-        if (rows[i][4] === p.d && ts > p.at) {          // E: same device finished a view
-          // after this one started => two overlapping views from one device.
-          return json_({ ok: false, error: 'replaced by a newer view on this device' });
+        if (rows[i][4] === p.d && rows[i][2] === p.v) {  // E/C: same device, same video
+          // That view started at (its finish time - its server seconds). If the two views
+          // started less than MIN_SECONDS apart they overlapped in time => only one counts.
+          // (2s tolerance for the rounding of column F.)
+          const otherStart = ts - Number(rows[i][5] || 0) * 1000;
+          if (Math.abs(otherStart - p.at) < MIN_SECONDS * 1000 - 2000) {
+            return json_({ ok: false, error: 'replaced by a newer view on this device' });
+          }
         }
       }
       end = start - 1;

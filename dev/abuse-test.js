@@ -49,9 +49,9 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   console.log(`   ...waiting ${MIN + 1}s (MIN_SECONDS) for the real-time checks`);
   await sleep((MIN + 1) * 1000);
   r = await post({ action: "finish", session: s2.session });
-  check("older view on the same device cannot finish", !r.ok && /replaced/.test(r.error), r);
+  check("first of two stacked views on one device counts", r.ok && !r.duplicate, r);
   r = await post({ action: "finish", session: s3.session });
-  check("newest view on the device finishes after MIN_SECONDS", r.ok && !r.duplicate, r);
+  check("second stacked (overlapping) view on the same device is rejected", !r.ok && /replaced/.test(r.error), r);
 
   // 7b. Same stacking attack, but Google has evicted the cache in between
   const s4 = await post({ action: "start", town: A, device: "attacker03" });
@@ -64,7 +64,7 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
     [f4, f5].filter(x => x.ok && !x.duplicate).length === 1, { f4, f5 });
 
   // 8. Replay the same ticket many times
-  const replays = await Promise.all(Array.from({ length: 10 }, () => post({ action: "finish", session: s3.session })));
+  const replays = await Promise.all(Array.from({ length: 10 }, () => post({ action: "finish", session: s2.session })));
   check("replaying a finished ticket adds nothing", replays.every(x => x.ok && x.duplicate), replays.find(x => !x.duplicate));
 
   // 9. Garbage input
@@ -82,8 +82,25 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   r = await post({ action: "finish", session: s1.session });
   check("a real, waited-out view from another device counts", r.ok && !r.duplicate, r);
 
+  // 11. Codex #1: a finished view recovered after the device already started its next view
+  const a1 = await post({ action: "start", town: A, device: "legit0004" });
+  await sleep((MIN + 1) * 1000);
+  const a2 = await post({ action: "start", town: A, device: "legit0004" });   // reload + play again
+  r = await post({ action: "finish", session: a1.session });                   // late recovery of view 1
+  check("a qualified view recovered after the next view started still counts", r.ok && !r.duplicate, r);
+  await sleep((MIN + 1) * 1000);
+  r = await post({ action: "finish", session: a2.session });
+  check("...and the next (sequential) view counts too", r.ok && !r.duplicate, r);
+
+  // 12. Codex #4: an abandoned start that reaches the server late can't block the real view
+  const b2 = await post({ action: "start", town: C, device: "legit0005" });     // the view actually watched
+  const b1 = await post({ action: "start", town: A, device: "legit0005" });     // stale, abandoned request
+  await sleep((MIN + 1) * 1000);
+  r = await post({ action: "finish", session: b2.session });
+  check("a late abandoned start doesn't block the real view", r.ok && !r.duplicate, r);
+
   const added = (await rows()) - before;
-  check("exactly 3 views were added in total", added === 3, { added });
+  check("exactly 6 views were added in total", added === 6, { added });
 
   const stats = await (await fetch(EXEC + "?action=stats")).json();
   check("stats never list unknown towns", stats.towns.every(t => cfg.towns.includes(t.town)), stats.towns);
