@@ -6,7 +6,6 @@ const EXEC = BASE + "/exec";
 const post = async body => (await fetch(EXEC, { method: "POST", headers: { "Content-Type": "text/plain" }, body: typeof body === "string" ? body : JSON.stringify(body) })).json();
 const rows = async () => (await (await fetch(BASE + "/__rows")).json()).length;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const TOKEN = "XXXX.DUMMY.TOKEN.XXXX"; // Cloudflare's test token
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log("PASS", name); } else { fail++; console.log("FAIL", name, JSON.stringify(detail)); }
@@ -20,15 +19,11 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   const before = await rows();
 
   // 1. Town not on the list
-  let r = await post({ action: "start", town: "Fake Town", device: "attacker01", turnstile: TOKEN });
+  let r = await post({ action: "start", town: "Fake Town", device: "attacker01" });
   check("rejects a town not on the list", !r.ok && r.error === "unknown town", r);
 
-  // 2. No bot-check token
-  r = await post({ action: "start", town: A, device: "attacker01" });
-  check("rejects start without bot check", !r.ok, r);
-
   // 3. Finish immediately (skip the watching)
-  const s1 = await post({ action: "start", town: A, device: "attacker01", turnstile: TOKEN });
+  const s1 = await post({ action: "start", town: A, device: "attacker01" });
   r = await post({ action: "finish", session: s1.session });
   check("rejects finishing before MIN_SECONDS (server clock)", !r.ok && r.error === "too early", r);
 
@@ -49,8 +44,8 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   check("rejects a made-up ticket", !r.ok && r.error === "invalid session", r);
 
   // 7. Stacking: start several views on one device; only the newest can finish
-  const s2 = await post({ action: "start", town: A, device: "attacker02", turnstile: TOKEN });
-  const s3 = await post({ action: "start", town: A, device: "attacker02", turnstile: TOKEN });
+  const s2 = await post({ action: "start", town: A, device: "attacker02" });
+  const s3 = await post({ action: "start", town: A, device: "attacker02" });
   console.log(`   ...waiting ${MIN + 1}s (MIN_SECONDS) for the real-time checks`);
   await sleep((MIN + 1) * 1000);
   r = await post({ action: "finish", session: s2.session });
@@ -65,7 +60,7 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   // 9. Garbage input
   r = await post("not json");
   check("rejects malformed body", !r.ok, r);
-  r = await post({ action: "start", town: A, device: "x".repeat(5000), turnstile: TOKEN });
+  r = await post({ action: "start", town: A, device: "x".repeat(5000) });
   check("rejects oversized request", !r.ok, r);
 
   // 10. Ticket from attacker01 (s1) is still valid if they really waited — that's a legit view

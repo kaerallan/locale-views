@@ -1,7 +1,7 @@
 // Watch page: town picker + YouTube player + server-verified views.
 //
 // One view = one "session":
-//   start  -> bot check (Turnstile) + server issues a signed, server-timed ticket
+//   start  -> the server issues a signed, server-timed ticket
 //   watch  -> the page counts time only while the video is playing and on screen
 //   finish -> once MIN seconds are watched, the ticket is sent back; the server
 //             checks its own clock, the signature and that the ticket is unused.
@@ -17,7 +17,7 @@
     title: $("title"), subtitle: $("subtitle"), notice: $("notice"), loading: $("loading"),
     stepTown: $("stepTown"), townForm: $("townForm"), townSelect: $("townSelect"), townContinue: $("townContinue"),
     stepWatch: $("stepWatch"), townName: $("townName"), changeTown: $("changeTown"),
-    progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"), botCheck: $("botCheck"),
+    progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"),
   };
 
   el.title.textContent = CFG.TITLE || "Watch our video";
@@ -60,11 +60,6 @@
       notice("This site isn't connected yet. The owner needs to set ENDPOINT_URL in config.js (see README).");
       return;
     }
-    if (!CFG.TURNSTILE_SITE_KEY) {
-      el.loading.classList.add("hidden");
-      notice("This site isn't fully set up yet. The owner needs to set TURNSTILE_SITE_KEY in config.js (see README).");
-      return;
-    }
     try {
       const res = await api("GET", { action: "config" });
       if (!res.ok) throw new Error(res.error || "config failed");
@@ -81,7 +76,6 @@
       el.townSelect.appendChild(o);
     }
     renderProgress();
-    loadTurnstile();
 
     const saved = store.get(K.town, "");
     if (server.towns.includes(saved)) { el.townSelect.value = saved; town = saved; }
@@ -161,11 +155,9 @@
   // ---------- start a view ----------
   async function startView() {
     state = "starting";
-    setStatus("Checking you're a real viewer…");
+    setStatus("Starting…");
     try {
-      const token = await getTurnstileToken();
-      if (state !== "starting") return; // abandoned meanwhile
-      const res = await api("POST", { action: "start", town, device: deviceId, turnstile: token });
+      const res = await api("POST", { action: "start", town, device: deviceId });
       if (state !== "starting") return;
       if (!res.ok) {
         if (res.error === "unknown town") { notice("The town list has changed — please refresh the page."); }
@@ -183,9 +175,7 @@
       if (state !== "starting") return;
       state = "idle";
       nextStartAt = Date.now() + 8000;
-      setStatus(err.message && err.message.indexOf("bot check") === 0
-        ? "We couldn't confirm you're a real viewer. Retrying…"
-        : "Couldn't reach the server. Retrying…");
+      setStatus("Couldn't reach the server. Retrying…");
     }
   }
 
@@ -247,43 +237,6 @@
     sessionTown = p.town;
     state = "finishing";
     sendFinish(p.session, 5000);
-  }
-
-  // ---------- Cloudflare Turnstile ----------
-  let tsReady = null, tsWidget = null, tsWaiting = null;
-  function loadTurnstile() {
-    tsReady = new Promise((resolve, reject) => {
-      window.onTurnstileLoad = resolve;
-      const s = document.createElement("script");
-      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad";
-      s.async = true;
-      s.onerror = () => reject(new Error("bot check couldn't load"));
-      document.head.appendChild(s);
-    });
-    tsReady.catch(() => {});
-  }
-  function getTurnstileToken() {
-    return tsReady.then(() => new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { tsWaiting = null; reject(new Error("bot check timed out")); }, 120000);
-      tsWaiting = {
-        resolve: t => { clearTimeout(timeout); tsWaiting = null; resolve(t); },
-        reject: e => { clearTimeout(timeout); tsWaiting = null; reject(e); },
-      };
-      if (tsWidget === null) {
-        tsWidget = turnstile.render(el.botCheck, {
-          sitekey: CFG.TURNSTILE_SITE_KEY,
-          action: "start",
-          appearance: "interaction-only",
-          execution: "execute",
-          callback: t => tsWaiting && tsWaiting.resolve(t),
-          "error-callback": () => { tsWaiting && tsWaiting.reject(new Error("bot check error")); return true; },
-          "expired-callback": () => {},
-        });
-      } else {
-        turnstile.reset(tsWidget);
-      }
-      turnstile.execute(tsWidget);
-    }));
   }
 
   // ---------- YouTube player ----------

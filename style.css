@@ -121,7 +121,6 @@ button.link {
 
 .status { margin-top: 12px; font-size: 14px; color: var(--muted); }
 .status.ok { color: var(--ok); font-weight: 600; }
-.bot-check:not(:empty) { margin-top: 12px; }
 
 .banner { border-radius: 10px; padding: 10px 14px; font-size: 14px; margin-bottom: 16px; }
 .banner.warn { background: var(--warn-soft); color: var(--warn-text); }
@@ -152,3 +151,35 @@ button.link {
 .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; }
 .empty { color: var(--muted); text-align: center; padding: 24px 0; }
 .err { color: var(--accent); }
+
+/* ---------- Laptop / desktop ---------- */
+@media (min-width: 900px) {
+  .wrap { max-width: 1160px; padding: 28px 32px 64px; }
+  header.top { margin-bottom: 28px; }
+  h1 { font-size: 38px; }
+  .sub { font-size: 17px; margin-bottom: 28px; }
+
+  /* Town picker: a comfortable centred card, not a full-width bar */
+  #stepTown { max-width: 560px; padding: 24px; }
+
+  /* Video on the left, progress panel on the right */
+  #stepWatch:not(.hidden) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 24px;
+    align-items: start;
+  }
+  #stepWatch .video-shell { margin-bottom: 0; }
+  #stepWatch .card { position: sticky; top: 24px; padding: 22px; }
+  #stepWatch .status { font-size: 15px; }
+
+  /* Results: wider tiles and a two-column town list */
+  .kpis { gap: 16px; }
+  .kpi { padding: 18px 20px; }
+  .rows { display: grid; grid-template-columns: 1fr 1fr; column-gap: 40px; }
+  .row:nth-child(2) { border-top: 0; padding-top: 0; }
+  .rows .empty { grid-column: 1 / -1; }
+}
+@media (min-width: 1400px) {
+  #stepWatch:not(.hidden) { grid-template-columns: minmax(0, 1fr) 360px; }
+}

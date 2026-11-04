@@ -2,15 +2,13 @@
  * Town Views — Google Apps Script backend.
  *
  * Every counted view must pass ALL of these server-side checks:
- *   1. A Cloudflare Turnstile bot check when the view starts (one check per view).
- *   2. The town is in TOWNS below (the page cannot add towns).
- *   3. At least MIN_SECONDS of real time passed on the SERVER's clock between
+ *   1. The town is in TOWNS below (the page cannot add towns).
+ *   2. At least MIN_SECONDS of real time passed on the SERVER's clock between
  *      "start" and "finish" — the browser's own timer is never trusted.
- *   4. The view's ticket is signed by this server and can be used only once.
- *   5. Only the newest view per device can finish (no stacking tabs).
+ *   3. The view's ticket is signed by this server and can be used only once.
+ *   4. Only the newest view per device can finish (no stacking tabs).
  *
  * Setup (see README.md for the full walkthrough):
- *   - Script properties: TURNSTILE_SECRET = your Cloudflare Turnstile secret key.
  *   - Run setup() once from the editor.
  *   - Deploy → Web app → Execute as: Me, Who has access: Anyone.
  *
@@ -57,8 +55,6 @@ const TOWNS = [
   'Tallipugo',
   'Tanqui',
 ];
-// Websites allowed to use this backend (checked via the Turnstile result).
-const ALLOWED_HOSTNAMES = ['kaerallan.github.io'];
 // ======================================================
 
 const SHEET_NAME = 'Views';
@@ -109,33 +105,11 @@ function start_(data) {
   if (!town) return json_({ ok: false, error: 'unknown town' });
   const device = id_(data.device, 64);
   if (device.length < 8) return json_({ ok: false, error: 'bad device id' });
-  if (typeof data.turnstile !== 'string' || !data.turnstile || data.turnstile.length > 4096) {
-    return json_({ ok: false, error: 'bot check missing' });
-  }
-
-  const check = verifyTurnstile_(data.turnstile);
-  if (!check.ok) return json_({ ok: false, error: check.error, botCheck: true });
-
   const sid = Utilities.getUuid();
   const payload = { s: sid, t: town, v: VIDEO_ID, d: device, at: Date.now() };
   // Newest view wins for this device: older unfinished views from it can no longer finish.
   CacheService.getScriptCache().put('dev_' + device, sid, 21600);
   return json_({ ok: true, session: sign_(payload), town: town, minSeconds: MIN_SECONDS });
-}
-
-function verifyTurnstile_(token) {
-  const secret = PropertiesService.getScriptProperties().getProperty('TURNSTILE_SECRET');
-  if (!secret) return { ok: false, error: 'server not set up (TURNSTILE_SECRET missing)' };
-  const res = UrlFetchApp.fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-    method: 'post',
-    payload: { secret: secret, response: token },
-    muteHttpExceptions: true,
-  });
-  let body = {};
-  try { body = JSON.parse(res.getContentText()); } catch (err) { /* treated as failure */ }
-  if (!body.success) return { ok: false, error: 'bot check failed' };
-  if (ALLOWED_HOSTNAMES.indexOf(body.hostname) < 0) return { ok: false, error: 'bot check failed (site)' };
-  return { ok: true };
 }
 
 // ---------------------------------------------------------------- finish a view
@@ -224,9 +198,6 @@ function setup() {
     props.setProperty('SIGNING_KEY', Utilities.getUuid() + Utilities.getUuid());
   }
   sheet_();
-  if (!props.getProperty('TURNSTILE_SECRET')) {
-    console.warn('Add TURNSTILE_SECRET under Project Settings → Script properties before going live.');
-  }
   console.log('Setup done. Spreadsheet: ' + ss.getName());
 }
 

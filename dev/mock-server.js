@@ -4,9 +4,6 @@
 //
 //   node dev/mock-server.js            -> http://localhost:8766
 //   MIN_SECONDS=8 node dev/mock-server.js   (shorter threshold for quick tests)
-//
-// Bot checks call Cloudflare's real verify endpoint with Cloudflare's public
-// TEST keys (they always pass), so the Turnstile wiring is exercised end to end.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -15,11 +12,9 @@ const crypto = require("crypto");
 
 const ROOT = path.resolve(__dirname, "..");
 const PORT = Number(process.env.PORT || 8766);
-const TEST_SITE_KEY = "1x00000000000000000000AA";            // Cloudflare test key: always passes
-const TEST_SECRET = "1x0000000000000000000000000000000AA";   // Cloudflare test secret: always passes
 
 // ---------------------------------------------------------------- fake Google services
-const props = new Map([["TURNSTILE_SECRET", process.env.TURNSTILE_SECRET || TEST_SECRET]]);
+const props = new Map();
 const cacheStore = new Map();
 const sheets = new Map();
 
@@ -77,16 +72,6 @@ const sandbox = {
       [...crypto.createHmac("sha256", toBuf(key)).update(toBuf(value)).digest()].map(b => b > 127 ? b - 256 : b),
     newBlob: bytes => ({ getDataAsString: () => toBuf(bytes).toString("utf8") }),
   },
-  UrlFetchApp: {
-    fetch: (url, opts) => {
-      // Synchronous like Apps Script: call Cloudflare via curl.
-      const { execFileSync } = require("child_process");
-      const args = ["-s", "-X", "POST", url];
-      for (const [k, v] of Object.entries(opts.payload || {})) args.push("--data-urlencode", k + "=" + v);
-      const out = execFileSync("curl", args, { encoding: "utf8", timeout: 15000 });
-      return { getContentText: () => out };
-    },
-  },
   ContentService: {
     MimeType: { JSON: "application/json" },
     createTextOutput: s => ({ content: s, setMimeType() { return this; } }),
@@ -95,8 +80,6 @@ const sandbox = {
 
 let code = fs.readFileSync(path.join(ROOT, "apps-script", "Code.gs"), "utf8");
 if (process.env.MIN_SECONDS) code = code.replace(/const MIN_SECONDS = \d+;/, "const MIN_SECONDS = " + Number(process.env.MIN_SECONDS) + ";");
-// Cloudflare's test keys report this hostname.
-code = code.replace(/const ALLOWED_HOSTNAMES = \[[^\]]*\];/, "const ALLOWED_HOSTNAMES = ['example.com', 'localhost'];");
 vm.createContext(sandbox);
 vm.runInContext(code, sandbox, { filename: "Code.gs" });
 vm.runInContext("setup()", sandbox);
@@ -128,7 +111,6 @@ http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/javascript" });
     return res.end(`window.TRACKER_CONFIG = {
       ENDPOINT_URL: "http://localhost:${PORT}/exec",
-      TURNSTILE_SITE_KEY: "${TEST_SITE_KEY}",
       TITLE: "Watch our video (LOCAL TEST)",
       SUBTITLE: "Mock backend — nothing here is saved.",
       STATS_REFRESH_SECONDS: 10,
