@@ -21,7 +21,7 @@
     $("rule").textContent = "A view counts after someone plays the video for at least " + need + ".";
     $("kTotal").textContent = total.toLocaleString();
     $("kTowns").textContent = withViews.length + " / " + towns.length;
-    $("kTop").textContent = withViews.length ? withViews[0].town : "–";
+    $("kTop").textContent = withViews.length ? withViews[0].town : "None yet";
     $("kTop").title = $("kTop").textContent;
 
     const list = $("rows");
@@ -52,7 +52,7 @@
       render(data);
     } catch (err) {
       console.error(err);
-      $("updated").innerHTML = '<span class="err">Couldn\'t load the latest numbers — retrying.</span>';
+      $("updated").innerHTML = '<span class="err">Couldn\'t get the latest numbers. Trying again soon.</span>';
     }
   }
 

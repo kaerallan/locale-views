@@ -72,7 +72,7 @@
       server = res;
     } catch (err) {
       console.error(err);
-      el.loading.textContent = "Couldn't load — check your connection and refresh the page.";
+      el.loading.textContent = "Something went wrong while loading. Check your connection and refresh the page.";
       return;
     }
     el.loading.classList.add("hidden");
@@ -88,6 +88,7 @@
     renderRecent();
     refreshTownButton();
     el.stepTown.classList.remove("hidden");
+    setStatus("Press play to start. Your view counts once you've watched for " + fmtDuration(required()) + ".");
 
     resumePendingFinish();
   }
@@ -219,12 +220,12 @@
   async function startView() {
     state = "starting";
     const myGen = gen;
-    setStatus("Starting…");
+    setStatus("Getting things ready…");
     try {
       const res = await api("POST", { action: "start", town, device: deviceId });
       if (myGen !== gen || state !== "starting") return; // abandoned meanwhile
       if (!res.ok) {
-        if (res.error === "unknown town") { notice("The list of locales has changed — please refresh the page."); }
+        if (res.error === "unknown town") { notice("The list of locales was updated. Please refresh the page."); }
         throw Object.assign(new Error(res.error || "start failed"), { retry: true });
       }
       session = res.session;
@@ -233,13 +234,13 @@
       state = "active";
       lastMark = null;
       accrue();
-      setStatus("Watching… keep it playing to count your view.");
+      setStatus("You're watching. Keep it playing to get your view counted.");
     } catch (err) {
       console.warn("Start failed:", err);
       if (myGen !== gen || state !== "starting") return;
       state = "idle";
       nextStartAt = Date.now() + 8000;
-      setStatus("Couldn't reach the server. Retrying…");
+      setStatus("We're having trouble connecting. Trying again in a moment.");
     }
   }
 
@@ -250,7 +251,7 @@
       state = "finishing";
       addPending(session, sessionTown);
     }
-    setStatus("Counting your view…");
+    setStatus("Saving your view…");
     clearTimeout(finishTimer);
     sendFinish(session, retryDelay || 5000);
   }
@@ -260,7 +261,7 @@
     try {
       res = await api("POST", { action: "finish", session: ticket, mobile: MOBILE });
     } catch (err) {
-      return scheduleFinishRetry(ticket, retryDelay, "Couldn't reach the server — retrying…");
+      return scheduleFinishRetry(ticket, retryDelay, "We're having trouble connecting. Trying again in a moment.");
     }
     if (ticket !== session || state !== "finishing") return; // stale reply
     if (res.ok) {
@@ -271,20 +272,20 @@
       el.counted.classList.remove("hidden");
       // The next view starts right away: every further full stretch counts again.
       resetView();
-      setStatus("Keep watching — every " + fmtDuration(required()) + " more counts as another view.");
+      setStatus("Keep watching if you like. Every extra " + fmtDuration(required()) + " counts as another view.");
       return;
     }
     if (res.retry || res.error === "too early") {
       const wait = res.retryInMs ? res.retryInMs + 500 : retryDelay;
-      return scheduleFinishRetry(ticket, wait, res.error === "too early" ? "Almost there…" : "Server busy — retrying…");
+      return scheduleFinishRetry(ticket, wait, res.error === "too early" ? "Almost there…" : "Lots of people are watching right now. Trying again in a moment.");
     }
     // Permanently rejected (expired, replaced by another tab, invalid): start over.
     removePending(ticket);
     resetView();
     nextStartAt = Date.now();
     setStatus(res.error === "replaced by a newer view on this device"
-      ? "This view was replaced by one in another tab or window."
-      : "This view couldn't be counted (" + res.error + "). Keep watching to try again.");
+      ? "It looks like you're also watching in another tab or window, so this one won't be counted. Please watch in just one."
+      : "Sorry, this view couldn't be counted. Keep watching and we'll try again.");
   }
 
   function scheduleFinishRetry(ticket, delay, msg) {
@@ -359,13 +360,13 @@
           onStateChange: e => {
             if (e.data === YT.PlayerState.ENDED && state === "done") {
               resetView();             // replaying after the end starts a fresh view
-              setStatus("Press play to watch again — it counts as another view.");
+              setStatus("Press play to watch again. It counts as another view.");
             } else if (e.data === YT.PlayerState.ENDED && state === "finishing") {
               endedWhileFinishing = true; // re-arm as soon as this view is confirmed
             } else if (e.data === YT.PlayerState.PAUSED && state === "active") {
-              setStatus("Paused — watch time only counts while playing.");
+              setStatus("Paused. Your time only adds up while the video is playing.");
             } else if (e.data === YT.PlayerState.PLAYING && state === "active") {
-              setStatus("Watching… keep it playing to count your view.");
+              setStatus("You're watching. Keep it playing to get your view counted.");
             }
             tick();
           },

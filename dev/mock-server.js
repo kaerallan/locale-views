@@ -116,7 +116,7 @@ http.createServer((req, res) => {
     return res.end(`window.TRACKER_CONFIG = {
       ENDPOINT_URL: "http://localhost:${PORT}/exec",
       TITLE: "Watch our video (LOCAL TEST)",
-      SUBTITLE: "Mock backend — nothing here is saved.",
+      SUBTITLE: "Mock backend. Nothing here is saved.",
       STATS_REFRESH_SECONDS: 10,
     };`);
   }

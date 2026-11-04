@@ -9,7 +9,7 @@ window.TRACKER_CONFIG = {
 
   // Page heading.
   TITLE: "Watch our video",
-  SUBTITLE: "Tell us where you're watching from — every locale counts!",
+  SUBTITLE: "Tell us where you're watching from. Every locale counts!",
 
   // How often the results page refreshes, in seconds.
   STATS_REFRESH_SECONDS: 30,
