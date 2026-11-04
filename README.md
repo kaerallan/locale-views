@@ -59,8 +59,8 @@ To check it works, open `YOUR_WEB_APP_URL?action=stats`. You should see your tow
 
 ### 2. Publish
 
-Commit and push `config.js`. GitHub Pages updates in about a minute at https://kaerallan.github.io/town-views/.
-Share that link, not the YouTube link. Results are at https://kaerallan.github.io/town-views/stats.html.
+Commit and push `config.js`. GitHub Pages updates in about a minute at https://kaerallan.github.io/locale-views/.
+Share that link, not the YouTube link. Results are at https://kaerallan.github.io/locale-views/stats.html.
 
 ### Changing the towns, video or minimum time later
 
