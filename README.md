@@ -4,7 +4,7 @@ A static website (hosted on GitHub Pages) that counts **real** views of one YouT
 
 - Viewers pick their town from a fixed list, then watch the video on the site.
 - A view counts only after the video has actually **played** for the minimum time, with the page on screen. Paused time, hidden-tab time and skipping ahead don't count.
-- The same person can be counted again by watching again (after the video ends, or on a new visit), but every view must be genuine.
+- A view is one full stretch of `MIN_SECONDS` of real playback (15 minutes). Any device can earn more views by watching longer or again — one view per completed stretch, never two at once.
 - Live totals per town are on the results page.
 
 Views are stored in a Google Sheet you own. A small Google Apps Script checks every view.

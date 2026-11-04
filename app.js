@@ -5,8 +5,9 @@
 //   watch  -> the page counts time only while the video is playing and on screen
 //   finish -> once MIN seconds are watched, the ticket is sent back; the server
 //             checks its own clock, the signature and that the ticket is unused.
-// After a view is counted, another one can start once the video has ended and is replayed
-// (or the page is reloaded).
+// A view = one full MIN-seconds stretch of real playback. As soon as one is counted the
+// next one starts, so a device that keeps watching earns one view per completed stretch
+// (never two at the same time — the server enforces that too).
 (function () {
   const { CFG, store, configured, fmtTime, api } = window.TV;
   const MOBILE = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -20,6 +21,7 @@
     recentWrap: $("recentWrap"), recentList: $("recentList"),
     stepWatch: $("stepWatch"), townName: $("townName"), changeTown: $("changeTown"),
     progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"),
+    counted: $("countedLine"),
   };
 
   el.title.textContent = CFG.TITLE || "Watch our video";
@@ -55,6 +57,7 @@
   let finishTimer = null;
   let gen = 0;                  // bumps whenever a view is abandoned, so stale replies are ignored
   let endedWhileFinishing = false;
+  let countedHere = 0;          // views counted on this page visit
 
   // ---------- load settings from the server ----------
   async function init() {
@@ -175,6 +178,9 @@
   }
 
   function required() { return server ? server.minSeconds : 30; }
+  function fmtDuration(sec) {
+    return sec % 60 === 0 ? (sec / 60) + (sec === 60 ? " minute" : " minutes") : sec + " seconds";
+  }
 
   function renderProgress() {
     const req = required();
@@ -243,13 +249,13 @@
     if (ticket !== session || state !== "finishing") return; // stale reply
     if (res.ok) {
       removePending(ticket);
-      const ended = endedWhileFinishing;
-      state = "done";
-      session = null;
-      renderProgress();
-      setStatus("✓ Your view from " + res.town + " has been counted. Thank you! " +
-        "To count another view, watch it again after the video ends.", "ok");
-      if (ended) resetView();   // the video already ended, so a replay is a new view
+      countedHere++;
+      el.counted.textContent = "✓ " + countedHere + (countedHere === 1 ? " view" : " views") +
+        " counted for " + res.town + " on this visit. Thank you!";
+      el.counted.classList.remove("hidden");
+      // The next view starts right away: every further full stretch counts again.
+      resetView();
+      setStatus("Keep watching — every " + fmtDuration(required()) + " more counts as another view.");
       return;
     }
     if (res.retry || res.error === "too early") {
@@ -319,7 +325,14 @@
     window.onYouTubeIframeAPIReady = () => {
       player = new YT.Player("player", {
         videoId: server.videoId,
-        playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+        // Standard youtube.com embed, started by the viewer, unmuted, visible and >= 200px:
+        // the conditions under which YouTube counts embedded plays. origin/widget_referrer
+        // let YouTube Analytics attribute these plays to this site ("Embedded player").
+        playerVars: {
+          playsinline: 1, rel: 0,
+          origin: location.origin,
+          widget_referrer: location.href,
+        },
         events: {
           onError: e => {
             // 2 = bad id, 5 = HTML5 error, 100 = removed/private, 101/150 = embedding disabled

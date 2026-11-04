@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <!-- YouTube embeds need the page's referrer to identify the embedding site. -->
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>Locale Views</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -49,6 +51,7 @@
         </div>
         <div class="track"><div id="progressFill" class="fill"></div></div>
         <div id="status" class="status" role="status" aria-live="polite">Press play — your view counts after you watch for a little while.</div>
+        <div id="countedLine" class="status ok hidden" role="status" aria-live="polite"></div>
       </div>
     </section>
 
