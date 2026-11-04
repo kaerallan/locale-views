@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Views by Town</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand"><span class="brand-dot"></span>Town Views</div>
+      <a href="index.html">← Watch the video</a>
+    </header>
+
+    <div id="demoBanner" class="banner demo hidden">
+      Demo mode — showing views saved in this browser only.
+    </div>
+
+    <h1>Views by town</h1>
+    <p id="rule" class="sub"></p>
+
+    <div class="kpis">
+      <div class="kpi"><div class="n" id="kTotal">–</div><div class="l">Counted views</div></div>
+      <div class="kpi"><div class="n" id="kTowns">–</div><div class="l">Towns</div></div>
+      <div class="kpi"><div class="n" id="kTop">–</div><div class="l">Top town</div></div>
+    </div>
+
+    <section class="card">
+      <ul id="rows" class="rows"><li class="empty">Loading…</li></ul>
+    </section>
+
+    <div class="meta">
+      <span id="updated"></span>
+      <span>Refreshes automatically</span>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="stats.js"></script>
+</body>
+</html>

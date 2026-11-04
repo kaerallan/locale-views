@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Watch the Video</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand"><span class="brand-dot"></span>Town Views</div>
+      <a href="stats.html">See town results →</a>
+    </header>
+
+    <div id="demoBanner" class="banner demo hidden">
+      Demo mode — views are saved only in this browser. Add your <code>ENDPOINT_URL</code> in config.js to go live.
+    </div>
+
+    <h1 id="title">Watch our video</h1>
+    <p id="subtitle" class="sub"></p>
+
+    <!-- Step 1: choose town -->
+    <section id="stepTown" class="card">
+      <form id="townForm">
+        <div class="field">
+          <label for="townSelect">Where are you watching from?</label>
+          <select id="townSelect" required>
+            <option value="" disabled selected>Choose your town…</option>
+          </select>
+        </div>
+        <div id="otherWrap" class="field hidden">
+          <label for="townOther">Your town</label>
+          <input id="townOther" type="text" maxlength="60" autocomplete="address-level2" placeholder="Type your town">
+        </div>
+        <button id="townContinue" class="primary" type="submit" disabled>Continue to video</button>
+      </form>
+    </section>
+
+    <!-- Step 2: watch -->
+    <section id="stepWatch" class="hidden">
+      <div id="doneBanner" class="banner done hidden"></div>
+
+      <div class="video-shell"><div id="player"></div></div>
+
+      <div class="card">
+        <div class="town-line">
+          <span>Watching from <strong id="townName"></strong></span>
+          <button id="changeTown" class="link" type="button">change</button>
+        </div>
+        <div id="progressBlock">
+          <div class="progress-head">
+            <span>Watch time</span>
+            <span id="progressText">0:00 / 0:30</span>
+          </div>
+          <div class="track"><div id="progressFill" class="fill"></div></div>
+        </div>
+        <div id="status" class="status">Press play — your view counts after you watch for a little while.</div>
+      </div>
+    </section>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
