@@ -17,9 +17,9 @@
  */
 
 // ===================== EDIT THESE =====================
-const VIDEO_ID = 'aeGGVeUmzWY';   // Esguerra Family | Turning Point | INCTV (38:04)
+const VIDEO_ID = 'osbT10CRQp0';   // INCINEMA 2026 | Wagas | Ecclesiastical District of La Union (19:16)
 // Seconds of real playback (server-timed) before a view counts on this site.
-const MIN_SECONDS = 30 * 60;   // 30 minutes
+const MIN_SECONDS = 19 * 60;   // 19 minutes = watch it to the end (video is 19:16)
 const TOWNS = [
   'Bacnotan',
   'Balaoan',
