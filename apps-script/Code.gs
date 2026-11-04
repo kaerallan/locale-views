@@ -17,7 +17,7 @@
  */
 
 // ===================== EDIT THESE =====================
-const VIDEO_ID = '8m4VmYMmwTw';   // Turning Point | Baguio City | INCTV (25:30)
+const VIDEO_ID = 'GsWHSUuBlJY';   // TEST: "True 18 minute randos" (18:00, unlisted, owner's channel)
 // Seconds of real playback (server-timed) before a view counts on this site.
 const MIN_SECONDS = 15 * 60;   // 15 minutes
 const TOWNS = [
