@@ -286,6 +286,12 @@
         videoId: server.videoId,
         playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
         events: {
+          onError: e => {
+            // 2 = bad id, 5 = HTML5 error, 100 = removed/private, 101/150 = embedding disabled
+            setStatus(e.data === 101 || e.data === 150
+              ? "This video can't be played here. Please let the organiser know."
+              : "The video couldn't load. Please refresh the page.");
+          },
           onStateChange: e => {
             if (e.data === YT.PlayerState.ENDED && state === "done") {
               resetView();             // replaying after the end starts a fresh view
