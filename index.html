@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>Watch the Video</title>
+  <title>Locale Views</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="wrap">
     <header class="top">
-      <div class="brand"><span class="brand-dot"></span>Town Views</div>
-      <a href="stats.html">See town results →</a>
+      <div class="brand"><span class="brand-dot"></span>Locale Views</div>
+      <a href="stats.html">See locale results →</a>
     </header>
 
     <h1 id="title">Watch our video</h1>
@@ -19,13 +19,17 @@
 
     <div id="notice" class="banner warn hidden"></div>
 
-    <!-- Step 1: choose town -->
+    <!-- Step 1: choose locale -->
     <section id="stepTown" class="card hidden">
       <form id="townForm">
         <label for="townSelect">Where are you watching from?</label>
         <select id="townSelect" required>
-          <option value="" disabled selected>Choose your town…</option>
+          <option value="" disabled selected>Choose your locale…</option>
         </select>
+        <div id="recentWrap" class="recent hidden">
+          <span class="recent-label">Recent:</span>
+          <span id="recentList" class="recent-list"></span>
+        </div>
         <button id="townContinue" class="primary" type="submit" disabled>Continue to video</button>
       </form>
     </section>

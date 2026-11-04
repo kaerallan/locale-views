@@ -1,4 +1,4 @@
-# Town Views — YouTube viewers by town
+# Locale Views — YouTube viewers by locale
 
 A static website (hosted on GitHub Pages) that counts **real** views of one YouTube video per town. Works on phones, laptops and desktops.
 

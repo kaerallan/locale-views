@@ -1,6 +1,6 @@
 // ============================================================
 //  Website settings.
-//  The video, the town list and the minimum watch time are set in
+//  The video, the locale list and the minimum watch time are set in
 //  apps-script/Code.gs (on the server) so they can't be tampered with.
 // ============================================================
 window.TRACKER_CONFIG = {
@@ -9,7 +9,7 @@ window.TRACKER_CONFIG = {
 
   // Page heading.
   TITLE: "Watch our video",
-  SUBTITLE: "Tell us where you're watching from — every town counts!",
+  SUBTITLE: "Tell us where you're watching from — every locale counts!",
 
   // How often the results page refreshes, in seconds.
   STATS_REFRESH_SECONDS: 30,

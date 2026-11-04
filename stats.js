@@ -16,8 +16,9 @@
     const max = towns.reduce((m, t) => Math.max(m, t.count), 0);
     const withViews = towns.filter(t => t.count > 0);
 
-    $("rule").textContent = "A view counts after someone plays the video for at least " +
-      data.minSeconds + " seconds.";
+    const m = data.minSeconds;
+    const need = m % 60 === 0 ? (m / 60) + (m === 60 ? " minute" : " minutes") : m + " seconds";
+    $("rule").textContent = "A view counts after someone plays the video for at least " + need + ".";
     $("kTotal").textContent = total.toLocaleString();
     $("kTowns").textContent = withViews.length + " / " + towns.length;
     $("kTop").textContent = withViews.length ? withViews[0].town : "–";
@@ -25,7 +26,7 @@
 
     const list = $("rows");
     list.innerHTML = "";
-    if (!towns.length) list.innerHTML = '<li class="empty">No towns configured.</li>';
+    if (!towns.length) list.innerHTML = '<li class="empty">No locales configured.</li>';
     for (const t of towns) {
       const li = document.createElement("li");
       li.className = "row";

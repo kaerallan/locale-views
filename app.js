@@ -1,4 +1,4 @@
-// Watch page: town picker + YouTube player + server-verified views.
+// Watch page: locale picker + YouTube player + server-verified views.
 //
 // One view = one "session":
 //   start  -> the server issues a signed, server-timed ticket
@@ -10,19 +10,20 @@
 (function () {
   const { CFG, store, configured, fmtTime, api } = window.TV;
   const MOBILE = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-  const K = { device: "tv_device_id", town: "tv_town", pending: "tv_pending_finish" };
+  const K = { device: "tv_device_id", town: "tv_town", recent: "tv_recent_locales", pending: "tv_pending_finish" };
+  const RECENT_MAX = 3;
 
   const $ = id => document.getElementById(id);
   const el = {
     title: $("title"), subtitle: $("subtitle"), notice: $("notice"), loading: $("loading"),
     stepTown: $("stepTown"), townForm: $("townForm"), townSelect: $("townSelect"), townContinue: $("townContinue"),
+    recentWrap: $("recentWrap"), recentList: $("recentList"),
     stepWatch: $("stepWatch"), townName: $("townName"), changeTown: $("changeTown"),
     progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"),
   };
 
   el.title.textContent = CFG.TITLE || "Watch our video";
   el.subtitle.textContent = CFG.SUBTITLE || "";
-  document.title = CFG.TITLE || document.title;
 
   function notice(msg) {
     el.notice.textContent = msg;
@@ -81,13 +82,45 @@
 
     const saved = store.get(K.town, "");
     if (server.towns.includes(saved)) { el.townSelect.value = saved; town = saved; }
+    renderRecent();
     refreshTownButton();
     el.stepTown.classList.remove("hidden");
 
     resumePendingFinish();
   }
 
-  // ---------- town picker ----------
+  // ---------- recent locales (quick picks under the dropdown) ----------
+  function getRecent() {
+    let list = store.get(K.recent, null);
+    if (!Array.isArray(list)) {               // first visit after this feature: seed from the last choice
+      const last = store.get(K.town, "");
+      list = last ? [last] : [];
+    }
+    return list.filter(t => server && server.towns.includes(t)).slice(0, RECENT_MAX);
+  }
+  function rememberRecent(t) {
+    store.set(K.recent, [t].concat(getRecent().filter(x => x !== t)).slice(0, RECENT_MAX));
+  }
+  function renderRecent() {
+    const list = getRecent();
+    el.recentList.innerHTML = "";
+    for (const t of list) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip";
+      b.textContent = t;
+      b.setAttribute("aria-label", "Watch from " + t);
+      b.addEventListener("click", () => {
+        el.townSelect.value = t;
+        refreshTownButton();
+        el.townForm.requestSubmit ? el.townForm.requestSubmit() : el.townForm.dispatchEvent(new Event("submit", { cancelable: true }));
+      });
+      el.recentList.appendChild(b);
+    }
+    el.recentWrap.classList.toggle("hidden", list.length === 0);
+  }
+
+  // ---------- locale picker ----------
   function refreshTownButton() { el.townContinue.disabled = !server || !server.towns.includes(el.townSelect.value); }
   el.townSelect.addEventListener("change", refreshTownButton);
 
@@ -96,6 +129,8 @@
     if (!server.towns.includes(el.townSelect.value)) return;
     town = el.townSelect.value;
     store.set(K.town, town);
+    rememberRecent(town);
+    renderRecent();
     el.townName.textContent = town;
     el.stepTown.classList.add("hidden");
     el.stepWatch.classList.remove("hidden");
@@ -167,7 +202,7 @@
       const res = await api("POST", { action: "start", town, device: deviceId });
       if (myGen !== gen || state !== "starting") return; // abandoned meanwhile
       if (!res.ok) {
-        if (res.error === "unknown town") { notice("The town list has changed — please refresh the page."); }
+        if (res.error === "unknown town") { notice("The list of locales has changed — please refresh the page."); }
         throw Object.assign(new Error(res.error || "start failed"), { retry: true });
       }
       session = res.session;
