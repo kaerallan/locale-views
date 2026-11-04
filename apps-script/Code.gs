@@ -18,9 +18,8 @@
 
 // ===================== EDIT THESE =====================
 const VIDEO_ID = '8m4VmYMmwTw';   // Turning Point | Baguio City | INCTV (25:30)
-// 30s of real playback is the widely reported point at which YouTube starts counting
-// a view (YouTube doesn't publish an official number).
-const MIN_SECONDS = 30;
+// Seconds of real playback (server-timed) before a view counts on this site.
+const MIN_SECONDS = 15 * 60;   // 15 minutes
 const TOWNS = [
   'Bacnotan',
   'Balaoan',
