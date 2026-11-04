@@ -1,93 +1,210 @@
 /**
  * Town Views — Google Apps Script backend.
  *
- * Paste this whole file into Extensions → Apps Script of a Google Sheet,
- * then Deploy → New deployment → Web app
- *   Execute as: Me
- *   Who has access: Anyone
- * Copy the Web app URL into ENDPOINT_URL in config.js.
+ * Every counted view must pass ALL of these server-side checks:
+ *   1. A Cloudflare Turnstile bot check when the view starts (one check per view).
+ *   2. The town is in TOWNS below (the page cannot add towns).
+ *   3. At least MIN_SECONDS of real time passed on the SERVER's clock between
+ *      "start" and "finish" — the browser's own timer is never trusted.
+ *   4. The view's ticket is signed by this server and can be used only once.
+ *   5. Only the newest view per device can finish (no stacking tabs).
  *
- * POST  (body = JSON text)  → records one qualified view (deduped per video + viewer)
- * GET   ?video=VIDEO_ID     → { ok, total, towns: [{town, count}], updated }
+ * Setup (see README.md for the full walkthrough):
+ *   - Script properties: TURNSTILE_SECRET = your Cloudflare Turnstile secret key.
+ *   - Run setup() once from the editor.
+ *   - Deploy → Web app → Execute as: Me, Who has access: Anyone.
+ *
+ * After editing this file, publish it with Deploy → Manage deployments → Edit →
+ * Version: New version (keeps the same URL).
  */
 
+// ===================== EDIT THESE =====================
+const VIDEO_ID = 'dQw4w9WgXcQ';
+const MIN_SECONDS = 30;
+const TOWNS = [
+  'Town A',
+  'Town B',
+  'Town C',
+];
+// Websites allowed to use this backend (checked via the Turnstile result).
+const ALLOWED_HOSTNAMES = ['kaerallan.github.io'];
+// ======================================================
+
 const SHEET_NAME = 'Views';
-const HEADERS = ['Timestamp', 'Town', 'Video ID', 'Viewer ID', 'Seconds watched', 'Device'];
-const MIN_SECONDS = 1;          // server-side sanity floor; real threshold lives in config.js
-const STATS_CACHE_SECONDS = 15; // GET results are cached briefly to keep the sheet fast
+const HEADERS = ['Timestamp', 'Town', 'Video ID', 'Session ID', 'Device ID', 'Seconds (server)', 'Device'];
+const COL_SESSION = 4;                 // column D
+const SESSION_MAX_AGE_MS = 6 * 3600 * 1000;
+const STATS_CACHE_SECONDS = 15;
+
+// ---------------------------------------------------------------- entry points
+
+function doGet(e) {
+  const action = (e && e.parameter && e.parameter.action) || 'stats';
+  try {
+    if (action === 'config') {
+      return json_({ ok: true, videoId: VIDEO_ID, minSeconds: MIN_SECONDS, towns: TOWNS });
+    }
+    if (action === 'stats') return statsResponse_();
+    return json_({ ok: false, error: 'unknown action' });
+  } catch (err) {
+    console.error(err);
+    return json_({ ok: false, error: String(err && err.message || err) });
+  }
+}
 
 function doPost(e) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  let data;
   try {
-    const data = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    const town = clean_(data.town, 60);
-    const videoId = id_(data.videoId, 20);
-    const viewerId = id_(data.viewerId, 64);
-    const seconds = Math.max(0, Math.round(Number(data.seconds) || 0));
-    const device = data.device === 'mobile' ? 'mobile' : 'desktop';
+    const raw = (e && e.postData && e.postData.contents) || '';
+    if (raw.length > 4000) return json_({ ok: false, error: 'request too large' });
+    data = JSON.parse(raw);
+  } catch (err) {
+    return json_({ ok: false, error: 'bad request' });
+  }
+  try {
+    if (data.action === 'start') return start_(data);
+    if (data.action === 'finish') return finish_(data);
+    return json_({ ok: false, error: 'unknown action' });
+  } catch (err) {
+    console.error(err);
+    return json_({ ok: false, error: 'server error', retry: true });
+  }
+}
 
-    if (!town || !videoId || !viewerId) return json_({ ok: false, error: 'missing fields' });
-    if (!/^[\w-]{6,20}$/.test(videoId)) return json_({ ok: false, error: 'bad video id' });
-    if (seconds < MIN_SECONDS) return json_({ ok: false, error: 'not enough watch time' });
+// ---------------------------------------------------------------- start a view
 
+function start_(data) {
+  const town = TOWNS.indexOf(data.town) >= 0 ? data.town : null;
+  if (!town) return json_({ ok: false, error: 'unknown town' });
+  const device = id_(data.device, 64);
+  if (device.length < 8) return json_({ ok: false, error: 'bad device id' });
+  if (typeof data.turnstile !== 'string' || !data.turnstile || data.turnstile.length > 4096) {
+    return json_({ ok: false, error: 'bot check missing' });
+  }
+
+  const check = verifyTurnstile_(data.turnstile);
+  if (!check.ok) return json_({ ok: false, error: check.error, botCheck: true });
+
+  const sid = Utilities.getUuid();
+  const payload = { s: sid, t: town, v: VIDEO_ID, d: device, at: Date.now() };
+  // Newest view wins for this device: older unfinished views from it can no longer finish.
+  CacheService.getScriptCache().put('dev_' + device, sid, 21600);
+  return json_({ ok: true, session: sign_(payload), town: town, minSeconds: MIN_SECONDS });
+}
+
+function verifyTurnstile_(token) {
+  const secret = PropertiesService.getScriptProperties().getProperty('TURNSTILE_SECRET');
+  if (!secret) return { ok: false, error: 'server not set up (TURNSTILE_SECRET missing)' };
+  const res = UrlFetchApp.fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'post',
+    payload: { secret: secret, response: token },
+    muteHttpExceptions: true,
+  });
+  let body = {};
+  try { body = JSON.parse(res.getContentText()); } catch (err) { /* treated as failure */ }
+  if (!body.success) return { ok: false, error: 'bot check failed' };
+  if (ALLOWED_HOSTNAMES.indexOf(body.hostname) < 0) return { ok: false, error: 'bot check failed (site)' };
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------- finish a view
+
+function finish_(data) {
+  const p = verify_(data.session);
+  if (!p) return json_({ ok: false, error: 'invalid session' });
+  if (p.v !== VIDEO_ID) return json_({ ok: false, error: 'video changed' });
+  if (TOWNS.indexOf(p.t) < 0) return json_({ ok: false, error: 'town no longer listed' });
+
+  const elapsedMs = Date.now() - p.at;
+  if (elapsedMs > SESSION_MAX_AGE_MS) return json_({ ok: false, error: 'session expired' });
+  if (elapsedMs < MIN_SECONDS * 1000) {
+    return json_({ ok: false, error: 'too early', retryInMs: MIN_SECONDS * 1000 - elapsedMs });
+  }
+
+  const cache = CacheService.getScriptCache();
+  if (cache.get('used_' + p.s)) return json_({ ok: true, duplicate: true, town: p.t });
+  const latest = cache.get('dev_' + p.d);
+  if (latest && latest !== p.s) return json_({ ok: false, error: 'replaced by a newer view on this device' });
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return json_({ ok: false, error: 'busy', retry: true });
+  try {
     const sheet = sheet_();
     const last = sheet.getLastRow();
     if (last > 1) {
-      // Columns C:D = Video ID, Viewer ID
-      const ids = sheet.getRange(2, 3, last - 1, 2).getValues();
-      for (let i = 0; i < ids.length; i++) {
-        if (ids[i][0] === videoId && ids[i][1] === viewerId) {
-          return json_({ ok: true, duplicate: true });
+      const sids = sheet.getRange(2, COL_SESSION, last - 1, 1).getValues();
+      for (let i = sids.length - 1; i >= 0; i--) {
+        if (sids[i][0] === p.s) {
+          cache.put('used_' + p.s, '1', 21600);
+          return json_({ ok: true, duplicate: true, town: p.t });
         }
       }
     }
+    const device = data.mobile === true ? 'mobile' : 'desktop';
     // Leading apostrophe stores the value as plain text (it isn't part of the value).
-    sheet.appendRow([new Date(), "'" + town, "'" + videoId, "'" + viewerId, seconds, device]);
-    CacheService.getScriptCache().remove('stats_' + videoId);
-    return json_({ ok: true });
-  } catch (err) {
-    return json_({ ok: false, error: String(err) });
+    sheet.appendRow([new Date(), "'" + p.t, "'" + p.v, "'" + p.s, "'" + p.d, Math.round(elapsedMs / 1000), device]);
+    SpreadsheetApp.flush();
+    cache.put('used_' + p.s, '1', 21600);
+    try { cache.remove('stats'); } catch (err) { /* best effort */ }
   } finally {
     lock.releaseLock();
   }
+  return json_({ ok: true, town: p.t });
 }
 
-function doGet(e) {
-  const videoId = id_(e && e.parameter && e.parameter.video, 20);
-  if (!videoId) return json_({ ok: false, error: 'add ?video=VIDEO_ID' });
+// ---------------------------------------------------------------- stats
 
+function statsResponse_() {
   const cache = CacheService.getScriptCache();
-  const cached = cache.get('stats_' + videoId);
+  const cached = cache.get('stats');
   if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
 
+  const counts = new Map(TOWNS.map(function (t) { return [t, 0]; }));
+  let total = 0;
   const sheet = sheet_();
   const last = sheet.getLastRow();
-  const groups = {};
-  let total = 0;
   if (last > 1) {
-    // Columns B:C = Town, Video ID
-    const rows = sheet.getRange(2, 2, last - 1, 2).getValues();
+    const rows = sheet.getRange(2, 2, last - 1, 2).getValues(); // B:C = Town, Video ID
     rows.forEach(function (r) {
-      if (r[1] !== videoId) return;
-      const name = String(r[0]).trim().replace(/\s+/g, ' ');
-      if (!name) return;
-      const key = name.toLowerCase();
-      if (!groups[key]) groups[key] = { town: name, count: 0 };
-      groups[key].count++;
+      if (r[1] !== VIDEO_ID || !counts.has(r[0])) return;
+      counts.set(r[0], counts.get(r[0]) + 1);
       total++;
     });
   }
-  const towns = Object.keys(groups).map(function (k) { return groups[k]; })
+  const towns = Array.from(counts, function (e) { return { town: e[0], count: e[1] }; })
     .sort(function (a, b) { return b.count - a.count || a.town.localeCompare(b.town); });
-
-  const body = JSON.stringify({ ok: true, total: total, towns: towns, updated: new Date().toISOString() });
-  cache.put('stats_' + videoId, body, STATS_CACHE_SECONDS);
+  const body = JSON.stringify({
+    ok: true, videoId: VIDEO_ID, minSeconds: MIN_SECONDS,
+    total: total, towns: towns, updated: new Date().toISOString(),
+  });
+  try { cache.put('stats', body, STATS_CACHE_SECONDS); } catch (err) { /* too big to cache: still serve it */ }
   return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
 }
 
-function sheet_() {
+// ---------------------------------------------------------------- one-time setup
+
+/** Run this once from the Apps Script editor (select "setup" → Run). */
+function setup() {
+  const props = PropertiesService.getScriptProperties();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('Open this script from the Google Sheet (Extensions → Apps Script) and run setup again.');
+  props.setProperty('SPREADSHEET_ID', ss.getId());
+  if (!props.getProperty('SIGNING_KEY')) {
+    props.setProperty('SIGNING_KEY', Utilities.getUuid() + Utilities.getUuid());
+  }
+  sheet_();
+  if (!props.getProperty('TURNSTILE_SECRET')) {
+    console.warn('Add TURNSTILE_SECRET under Project Settings → Script properties before going live.');
+  }
+  console.log('Setup done. Spreadsheet: ' + ss.getName());
+}
+
+// ---------------------------------------------------------------- helpers
+
+function sheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (!id) throw new Error('Run setup() once from the Apps Script editor.');
+  const ss = SpreadsheetApp.openById(id);
   let sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) {
     sh = ss.insertSheet(SHEET_NAME);
@@ -97,13 +214,42 @@ function sheet_() {
   return sh;
 }
 
-function clean_(v, max) {
-  // Strip characters that could be read as spreadsheet formulas.
-  return String(v == null ? '' : v).trim().replace(/\s+/g, ' ').replace(/^[=+\-@]+/, '').slice(0, max);
+function signingKey_() {
+  const key = PropertiesService.getScriptProperties().getProperty('SIGNING_KEY');
+  if (!key) throw new Error('Run setup() once from the Apps Script editor.');
+  return key;
+}
+
+function sign_(payload) {
+  const body = Utilities.base64EncodeWebSafe(JSON.stringify(payload));
+  const sig = Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(body, signingKey_()));
+  return body + '.' + sig;
+}
+
+function verify_(token) {
+  if (typeof token !== 'string' || token.length > 1000) return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const expected = Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(parts[0], signingKey_()));
+  if (!safeEqual_(expected, parts[1])) return null;
+  try {
+    const p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
+    if (typeof p.s !== 'string' || typeof p.t !== 'string' || typeof p.d !== 'string' || typeof p.at !== 'number') return null;
+    return p;
+  } catch (err) {
+    return null;
+  }
+}
+
+function safeEqual_(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 function id_(v, max) {
-  return String(v == null ? '' : v).trim().replace(/[^\w-]/g, '').slice(0, max);
+  return String(v == null ? '' : v).replace(/[^\w-]/g, '').slice(0, max);
 }
 
 function json_(obj) {

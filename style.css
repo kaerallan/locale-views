@@ -104,6 +104,7 @@ button.link {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
+  min-height: 200px; /* YouTube's minimum player size */
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
@@ -120,9 +121,10 @@ button.link {
 
 .status { margin-top: 12px; font-size: 14px; color: var(--muted); }
 .status.ok { color: var(--ok); font-weight: 600; }
+.bot-check:not(:empty) { margin-top: 12px; }
 
 .banner { border-radius: 10px; padding: 10px 14px; font-size: 14px; margin-bottom: 16px; }
-.banner.demo { background: var(--warn-soft); color: var(--warn-text); }
+.banner.warn { background: var(--warn-soft); color: var(--warn-text); }
 .banner.done { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
 
 .hidden { display: none !important; }

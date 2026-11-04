@@ -1,79 +1,107 @@
 # Town Views — YouTube viewers by town
 
-A static website (works on GitHub Pages) that:
+A static website (hosted on GitHub Pages) that counts **real** views of one YouTube video per town.
 
-- asks each viewer which town they're watching from,
-- plays your YouTube video,
-- measures how long they **actually play** it (paused time, hidden-tab time and skipping ahead don't count),
-- counts a view only once they reach the minimum watch time,
-- shows live totals per town on a results page.
+- Viewers pick their town from a fixed list, then watch the video on the site.
+- A view counts only after the video has actually **played** for the minimum time, with the page on screen. Paused time, hidden-tab time and skipping ahead don't count.
+- The same person can be counted again by watching again (after the video ends, or on a new visit), but every view must be genuine.
+- Live totals per town are on the results page.
 
-Views are stored in a Google Sheet you own, through a small free Google Apps Script.
+Views are stored in a Google Sheet you own. A small Google Apps Script checks every view, and a free Cloudflare Turnstile bot check runs before each one.
 
 | File | What it is |
 |---|---|
-| `index.html` | Watch page (town picker + video + progress bar) |
-| `stats.html` | Results page (views per town, auto-refreshing) |
-| `config.js` | **The only file you need to edit** — video ID, minimum seconds, town list, backend URL |
-| `apps-script/Code.gs` | Backend to paste into Google Apps Script |
+| `index.html`, `app.js` | Watch page |
+| `stats.html`, `stats.js` | Results page |
+| `config.js` | Website settings: backend URL, bot-check site key, page title |
+| `apps-script/Code.gs` | The backend. **The video, town list and minimum seconds are set here.** |
+| `dev/` | Local test server and abuse tests (not needed for the live site) |
 
 ---
 
-## 1. Try it first (demo mode)
+## How views are protected
 
-With `ENDPOINT_URL` left empty, the site runs in demo mode and saves views only in your own browser. Open `index.html` through any local web server, for example:
+The browser is never trusted to say "this view counts". The server checks every view:
 
-```bash
-python -m http.server 8000
-```
+| An attacker tries to… | What stops it |
+|---|---|
+| Send fake views with a script | Each view needs a fresh Cloudflare Turnstile pass, verified by the server. Tokens are single-use and tied to your site's address. |
+| Count a view without watching | The server issues a signed ticket when the view starts and rejects it until `MIN_SECONDS` have passed **on the server's clock**. |
+| Add a town, or switch the town later | Towns are checked against the list in `Code.gs`. The town is sealed inside the signed ticket, so editing it breaks the signature. |
+| Replay or forge tickets | Tickets are signed with a secret key only the server knows, and each one can be counted only once. |
+| Stack many tabs on one device | Starting a view cancels any unfinished view on that device. |
 
-then visit http://localhost:8000. (Opening the file directly with `file://` won't load the YouTube player.)
+`dev/abuse-test.js` runs all of these attacks against a local copy of the backend.
 
-## 2. Edit `config.js`
+**What it can't fully stop:** a person who really opens the site in many separate browsers or private windows at once, passes the bot check in each, and leaves them all playing. They would add one view per window per `MIN_SECONDS`. That takes real effort and real devices, and the Sheet logs time, town and an anonymous device ID for every view, so bursts are easy to spot and delete. No website can confirm that a human is actually looking at the screen.
 
-- `VIDEO_ID` — the part after `v=` in the YouTube link.
-- `MIN_SECONDS` — how long someone has to watch before the view counts.
-- `TOWNS` — your list of towns. `ALLOW_OTHER_TOWN: true` lets people type one that isn't listed.
-- `ONE_VIEW_PER_DEVICE` — `true` counts each phone/computer once.
+---
 
-## 3. Set up the Google Sheet backend (≈5 minutes)
+## Setup (about 15 minutes)
 
-1. Create a new Google Sheet (any name).
-2. In the sheet: **Extensions → Apps Script**.
-3. Delete what's there, paste the contents of `apps-script/Code.gs`, and click **Save**.
-4. Click **Deploy → New deployment**. Click the gear ⚙ → **Web app**.
+### 1. Cloudflare Turnstile (free bot check)
+
+1. Sign up or log in at https://dash.cloudflare.com, then open **Turnstile** in the left menu.
+2. Click **Add widget**.
+   - Widget name: `Town Views`
+   - Hostname: `kaerallan.github.io`
+   - Widget mode: **Invisible** (or *Managed* if you prefer the occasional checkbox)
+3. Copy the **Site Key** and the **Secret Key**.
+4. Put the **Site Key** in `config.js` → `TURNSTILE_SITE_KEY`. Keep the Secret Key for step 2.
+
+### 2. Google Sheet + Apps Script backend
+
+1. Create a new Google Sheet.
+2. In the sheet: **Extensions → Apps Script**. Delete what's there, paste in all of `apps-script/Code.gs`.
+3. At the top of the script, set:
+   - `VIDEO_ID`: the part after `v=` in the YouTube link
+   - `MIN_SECONDS`: seconds of watching before a view counts (keep it shorter than the video)
+   - `TOWNS`: the fixed list of towns, spelled exactly as they should appear
+4. Click **Save**.
+5. **Project Settings** (gear icon) → **Script properties** → **Add script property**:
+   - Property: `TURNSTILE_SECRET`
+   - Value: your Turnstile **Secret Key**
+
+   Never put the secret key in `Code.gs` or anywhere on GitHub.
+6. Back in the editor, choose the function **`setup`** in the toolbar and click **Run**. Approve the permissions. Google warns the app isn't verified: click *Advanced → Go to project*, since it's your own script.
+7. **Deploy → New deployment** → gear → **Web app**
    - Execute as: **Me**
    - Who has access: **Anyone**
-5. Click **Deploy**, approve the permissions (Google will warn that the app isn't verified — click *Advanced → Go to project* since it's your own script).
-6. Copy the **Web app URL** (ends in `/exec`) and paste it into `ENDPOINT_URL` in `config.js`.
+8. Click **Deploy** and copy the **Web app URL** (ends in `/exec`). Put it in `config.js` → `ENDPOINT_URL`.
 
-Check it works: open `YOUR_WEB_APP_URL?video=YOUR_VIDEO_ID` in a browser — you should see `{"ok":true,"total":0,...}`.
+To check it works, open `YOUR_WEB_APP_URL?action=stats`. You should see your towns, each with `"count":0`.
 
-> If you change `Code.gs` later, use **Deploy → Manage deployments → Edit → Version: New version** so the URL stays the same.
+### 3. Publish
 
-Each counted view becomes a row in the **Views** tab: time, town, video, anonymous viewer ID, seconds watched, mobile/desktop.
+Commit and push `config.js`. GitHub Pages updates in about a minute at https://kaerallan.github.io/town-views/.
+Share that link, not the YouTube link. Results are at https://kaerallan.github.io/town-views/stats.html.
 
-## 4. Publish on GitHub Pages
+### Changing the towns, video or minimum time later
 
-1. Create a new public repository on GitHub (e.g. `town-views`).
-2. Upload all the files in this folder (keep the same structure).
-3. Repository **Settings → Pages** → Source: *Deploy from a branch* → Branch: `main`, folder `/ (root)` → Save.
-4. After a minute your site is at `https://YOUR-USERNAME.github.io/town-views/`.
-   Share that link (not the YouTube link) so views get counted. Results are at `.../stats.html`.
+Edit them in the Apps Script editor, then **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The URL stays the same and the website picks up the change automatically. If you rename a town, views recorded under the old name stop showing (they stay in the Sheet).
 
 ---
 
-## How the counting works
+## Removing suspicious views
 
-- Every second the page checks: is the video playing **and** is the page on screen? If yes, one second is added.
-- Progress is saved on the device, so reloading the page doesn't lose it.
-- If the video is shorter than `MIN_SECONDS`, the requirement becomes the full video length minus 2 seconds.
-- Once the threshold is reached, the view is sent to the sheet. If the network fails it retries automatically (and again next visit).
-- Each device gets a random anonymous ID; the sheet ignores repeat views from the same ID for the same video.
+Each view is a row in the **Views** tab: time, town, video, session ID, device ID, seconds (measured by the server), mobile/desktop. Delete any rows you don't trust. The results page updates within about 15 seconds.
 
-## Limitations to know about
+## Testing locally
 
-- **Town is self-reported.** Viewers pick their own town. Automatic IP-based location is possible but is often wrong at the town level (mobile data in particular), so it's not used.
-- **It's not tamper-proof.** A determined person can clear their browser data or call the endpoint directly to add fake views. It's fine for a community count, not for anything with prizes or money attached.
-- **Only views through this site are counted**, not people who watch directly on YouTube. YouTube Studio's own analytics (Audience → Top geographies / cities) shows those, at a coarser level.
+Requires Node.js 18+ and curl.
+
+```bash
+MIN_SECONDS=8 node dev/mock-server.js
+```
+
+Open http://localhost:8766. This runs `Code.gs` against an in-memory fake Sheet, with Cloudflare's public test keys. In another terminal, run the attack tests:
+
+```bash
+node dev/abuse-test.js
+```
+
+## Limits
+
+- Free Google accounts can make about 20,000 bot-check verifications per day, which means about 20,000 views per day.
+- Only views through this site are counted, not people watching directly on YouTube. YouTube Studio's Analytics → Audience shows those at a coarser city level.
 - The results page is public to anyone with the link.

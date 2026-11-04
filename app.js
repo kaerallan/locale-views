@@ -1,188 +1,309 @@
-// Watch page: town picker + YouTube player + real watch-time tracking.
+// Watch page: town picker + YouTube player + server-verified views.
+//
+// One view = one "session":
+//   start  -> bot check (Turnstile) + server issues a signed, server-timed ticket
+//   watch  -> the page counts time only while the video is playing and on screen
+//   finish -> once MIN seconds are watched, the ticket is sent back; the server
+//             checks its own clock, the signature and that the ticket is unused.
+// After a view is counted, another one can start once the video has ended and is replayed
+// (or the page is reloaded).
 (function () {
-  const { CFG, store, isDemo, fmtTime, sendView } = window.TV;
-  const VID = CFG.VIDEO_ID;
-  const OTHER = "__other__";
-
-  // Per-device keys (scoped to this video)
-  const K = {
-    viewer: "tv_viewer_id",
-    town: "tv_town",
-    watched: "tv_watched_" + VID,   // seconds accumulated so far (survives reloads)
-    counted: "tv_counted_" + VID,   // { town, at } once the view was recorded
-    pending: "tv_pending_" + VID,   // a qualified view that failed to send
-  };
+  const { CFG, store, configured, fmtTime, api } = window.TV;
+  const MOBILE = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  const K = { device: "tv_device_id", town: "tv_town", pending: "tv_pending_finish" };
 
   const $ = id => document.getElementById(id);
   const el = {
-    demo: $("demoBanner"), title: $("title"), subtitle: $("subtitle"),
-    stepTown: $("stepTown"), townForm: $("townForm"), townSelect: $("townSelect"),
-    otherWrap: $("otherWrap"), townOther: $("townOther"), townContinue: $("townContinue"),
+    title: $("title"), subtitle: $("subtitle"), notice: $("notice"), loading: $("loading"),
+    stepTown: $("stepTown"), townForm: $("townForm"), townSelect: $("townSelect"), townContinue: $("townContinue"),
     stepWatch: $("stepWatch"), townName: $("townName"), changeTown: $("changeTown"),
-    progressBlock: $("progressBlock"), progressText: $("progressText"), progressFill: $("progressFill"),
-    status: $("status"), doneBanner: $("doneBanner"),
+    progressText: $("progressText"), progressFill: $("progressFill"), status: $("status"), botCheck: $("botCheck"),
   };
 
-  // ---------- viewer id ----------
-  let viewerId = store.get(K.viewer, null);
-  if (!viewerId) {
-    viewerId = (crypto.randomUUID ? crypto.randomUUID() :
-      Date.now().toString(36) + Math.random().toString(36).slice(2));
-    store.set(K.viewer, viewerId);
-  }
-
-  // ---------- header ----------
   el.title.textContent = CFG.TITLE || "Watch our video";
   el.subtitle.textContent = CFG.SUBTITLE || "";
   document.title = CFG.TITLE || document.title;
-  if (isDemo) el.demo.classList.remove("hidden");
+
+  function notice(msg) {
+    el.notice.textContent = msg;
+    el.notice.classList.toggle("hidden", !msg);
+  }
+  function setStatus(msg, kind) {
+    el.status.textContent = msg;
+    el.status.className = "status" + (kind ? " " + kind : "");
+  }
+
+  // ---------- device id (anonymous; only used so one device runs one view at a time) ----------
+  let deviceId = store.get(K.device, null);
+  if (!deviceId || !/^[\w-]{8,64}$/.test(deviceId)) {
+    deviceId = crypto.randomUUID ? crypto.randomUUID()
+      : Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    store.set(K.device, deviceId);
+  }
+
+  // ---------- state ----------
+  let server = null;            // { videoId, minSeconds, towns }
+  let town = "";
+  let player = null;
+  let state = "idle";           // idle | starting | active | finishing | done
+  let session = null;           // signed ticket from the server
+  let sessionTown = "";
+  let watched = 0;
+  let lastMark = null;          // performance.now() when counting last (re)started
+  let nextStartAt = 0;          // backoff for failed starts
+  let finishTimer = null;
+
+  // ---------- load settings from the server ----------
+  async function init() {
+    if (!configured) {
+      el.loading.classList.add("hidden");
+      notice("This site isn't connected yet. The owner needs to set ENDPOINT_URL in config.js (see README).");
+      return;
+    }
+    if (!CFG.TURNSTILE_SITE_KEY) {
+      el.loading.classList.add("hidden");
+      notice("This site isn't fully set up yet. The owner needs to set TURNSTILE_SITE_KEY in config.js (see README).");
+      return;
+    }
+    try {
+      const res = await api("GET", { action: "config" });
+      if (!res.ok) throw new Error(res.error || "config failed");
+      server = res;
+    } catch (err) {
+      console.error(err);
+      el.loading.textContent = "Couldn't load — check your connection and refresh the page.";
+      return;
+    }
+    el.loading.classList.add("hidden");
+    for (const t of server.towns) {
+      const o = document.createElement("option");
+      o.value = t; o.textContent = t;
+      el.townSelect.appendChild(o);
+    }
+    renderProgress();
+    loadTurnstile();
+
+    const saved = store.get(K.town, "");
+    if (server.towns.includes(saved)) { el.townSelect.value = saved; town = saved; }
+    refreshTownButton();
+    el.stepTown.classList.remove("hidden");
+
+    resumePendingFinish();
+  }
 
   // ---------- town picker ----------
-  for (const t of CFG.TOWNS) {
-    const o = document.createElement("option");
-    o.value = t; o.textContent = t;
-    el.townSelect.appendChild(o);
-  }
-  if (CFG.ALLOW_OTHER_TOWN) {
-    const o = document.createElement("option");
-    o.value = OTHER; o.textContent = "Other (type it in)";
-    el.townSelect.appendChild(o);
-  }
-
-  function chosenTown() {
-    const v = el.townSelect.value;
-    if (v === OTHER) return el.townOther.value.trim().replace(/\s+/g, " ");
-    return v;
-  }
-  function refreshTownButton() {
-    el.otherWrap.classList.toggle("hidden", el.townSelect.value !== OTHER);
-    el.townContinue.disabled = !chosenTown();
-  }
-  el.townSelect.addEventListener("change", () => {
-    refreshTownButton();
-    if (el.townSelect.value === OTHER) el.townOther.focus();
-  });
-  el.townOther.addEventListener("input", refreshTownButton);
-
-  let town = store.get(K.town, "");
-  const counted = () => store.get(K.counted, null);
+  function refreshTownButton() { el.townContinue.disabled = !server || !server.towns.includes(el.townSelect.value); }
+  el.townSelect.addEventListener("change", refreshTownButton);
 
   el.townForm.addEventListener("submit", e => {
     e.preventDefault();
-    const t = chosenTown();
-    if (!t) return;
-    town = t;
+    if (!server.towns.includes(el.townSelect.value)) return;
+    town = el.townSelect.value;
     store.set(K.town, town);
-    showWatch();
+    el.townName.textContent = town;
+    el.stepTown.classList.add("hidden");
+    el.stepWatch.classList.remove("hidden");
+    loadPlayer();
   });
 
   el.changeTown.addEventListener("click", () => {
-    if (counted() && CFG.ONE_VIEW_PER_DEVICE) return; // already locked in
+    if (player && player.pauseVideo) player.pauseVideo();
+    accrue();
+    if (state !== "finishing") resetView();   // an unfinished view is abandoned
     el.stepWatch.classList.add("hidden");
     el.stepTown.classList.remove("hidden");
-    if (CFG.TOWNS.includes(town)) el.townSelect.value = town;
-    else if (CFG.ALLOW_OTHER_TOWN && town) { el.townSelect.value = OTHER; el.townOther.value = town; }
     refreshTownButton();
   });
 
-  function showWatch() {
-    el.stepTown.classList.add("hidden");
-    el.stepWatch.classList.remove("hidden");
-    el.townName.textContent = town;
-    loadPlayer();
+  function resetView() {
+    state = "idle";
+    session = null;
+    watched = 0;
+    lastMark = null;
     renderProgress();
   }
 
-  // ---------- watch-time tracking ----------
-  let watched = Number(store.get(K.watched, 0)) || 0;
-  let required = Math.max(1, Number(CFG.MIN_SECONDS) || 30);
-  let player = null, playerLoaded = false, lastTick = null, sending = false;
+  // ---------- watch-time accounting ----------
+  function isPlaying() {
+    return !!(player && player.getPlayerState && player.getPlayerState() === YT.PlayerState.PLAYING);
+  }
+  function isCounting() {
+    return state === "active" && isPlaying() && document.visibilityState === "visible" &&
+      !el.stepWatch.classList.contains("hidden");
+  }
+  // Adds the time since the last mark (if we were counting), then re-marks.
+  // Called on every tick AND on every play/pause/visibility change, so no time is lost or invented.
+  function accrue() {
+    const now = performance.now();
+    if (lastMark !== null) watched += Math.min((now - lastMark) / 1000, 2);
+    lastMark = isCounting() ? now : null;
+  }
+
+  function required() { return server ? server.minSeconds : 30; }
 
   function renderProgress() {
-    const c = counted();
-    if (c && CFG.ONE_VIEW_PER_DEVICE) {
-      el.progressBlock.classList.add("hidden");
-      el.changeTown.classList.add("hidden");
-      el.townName.textContent = c.town;
-      el.doneBanner.textContent = "✓ Your view from " + c.town + " has been counted. Thank you!";
-      el.doneBanner.classList.remove("hidden");
-      el.status.textContent = "Feel free to keep watching.";
-      el.status.className = "status";
-      return;
-    }
-    const shown = Math.min(watched, required);
-    el.progressText.textContent = fmtTime(shown) + " / " + fmtTime(required);
-    el.progressFill.style.width = (100 * shown / required).toFixed(1) + "%";
+    const req = required();
+    const shown = state === "done" ? req : Math.min(watched, req);
+    el.progressText.textContent = fmtTime(shown) + " / " + fmtTime(req);
+    el.progressFill.style.width = (100 * shown / req).toFixed(1) + "%";
   }
 
   function tick() {
-    const now = performance.now();
-    const playing = player && player.getPlayerState && player.getPlayerState() === YT.PlayerState.PLAYING;
-    const visible = document.visibilityState === "visible";
-    if (playing && visible && lastTick !== null) {
-      // Count real elapsed time, capped so a frozen/background tab can't add a big jump.
-      watched += Math.min((now - lastTick) / 1000, 1.5);
-      store.set(K.watched, Math.round(watched * 10) / 10);
-      renderProgress();
-      if (watched >= required) qualify();
+    accrue();
+    renderProgress();
+    if (state === "idle" && isPlaying() && document.visibilityState === "visible" &&
+        Date.now() >= nextStartAt && !el.stepWatch.classList.contains("hidden")) {
+      startView();
     }
-    lastTick = (playing && visible) ? now : null;
+    if (state === "active" && watched >= required()) finishView();
   }
 
-  async function qualify() {
-    if (sending) return;
-    if (counted() && CFG.ONE_VIEW_PER_DEVICE) return;
-    sending = true;
-    const record = {
-      videoId: VID,
-      town,
-      viewerId,
-      seconds: Math.round(watched),
-      device: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? "mobile" : "desktop",
-    };
-    store.set(K.pending, record);
-    el.status.textContent = "Counting your view…";
+  // ---------- start a view ----------
+  async function startView() {
+    state = "starting";
+    setStatus("Checking you're a real viewer…");
     try {
-      await sendView(record);
-      store.remove(K.pending);
-      store.set(K.counted, { town, at: new Date().toISOString() });
-      if (!CFG.ONE_VIEW_PER_DEVICE) { watched = 0; store.set(K.watched, 0); }
-      renderProgress();
-      if (!CFG.ONE_VIEW_PER_DEVICE) {
-        el.status.textContent = "✓ View counted for " + town + ".";
-        el.status.className = "status ok";
+      const token = await getTurnstileToken();
+      if (state !== "starting") return; // abandoned meanwhile
+      const res = await api("POST", { action: "start", town, device: deviceId, turnstile: token });
+      if (state !== "starting") return;
+      if (!res.ok) {
+        if (res.error === "unknown town") { notice("The town list has changed — please refresh the page."); }
+        throw Object.assign(new Error(res.error || "start failed"), { retry: true });
       }
+      session = res.session;
+      sessionTown = res.town;
+      watched = 0;
+      state = "active";
+      lastMark = null;
+      accrue();
+      setStatus("Watching… keep it playing to count your view.");
     } catch (err) {
-      console.warn("Send failed, will retry:", err);
-      el.status.textContent = "Couldn't reach the server — we'll retry automatically.";
-      setTimeout(() => { sending = false; qualify(); }, 15000);
+      console.warn("Start failed:", err);
+      if (state !== "starting") return;
+      state = "idle";
+      nextStartAt = Date.now() + 8000;
+      setStatus(err.message && err.message.indexOf("bot check") === 0
+        ? "We couldn't confirm you're a real viewer. Retrying…"
+        : "Couldn't reach the server. Retrying…");
+    }
+  }
+
+  // ---------- finish a view ----------
+  function finishView(retryDelay) {
+    if (state !== "active" && state !== "finishing") return;
+    if (state === "active") {
+      state = "finishing";
+      store.set(K.pending, { session, town: sessionTown });
+    }
+    setStatus("Counting your view…");
+    clearTimeout(finishTimer);
+    sendFinish(session, retryDelay || 5000);
+  }
+
+  async function sendFinish(ticket, retryDelay) {
+    let res;
+    try {
+      res = await api("POST", { action: "finish", session: ticket, mobile: MOBILE });
+    } catch (err) {
+      return scheduleFinishRetry(ticket, retryDelay, "Couldn't reach the server — retrying…");
+    }
+    if (ticket !== session || state !== "finishing") return; // stale reply
+    if (res.ok) {
+      store.remove(K.pending);
+      state = "done";
+      session = null;
+      renderProgress();
+      setStatus("✓ Your view from " + res.town + " has been counted. Thank you! " +
+        "To count another view, watch it again after the video ends.", "ok");
       return;
     }
-    sending = false;
+    if (res.retry || res.error === "too early") {
+      const wait = res.retryInMs ? res.retryInMs + 500 : retryDelay;
+      return scheduleFinishRetry(ticket, wait, res.error === "too early" ? "Almost there…" : "Server busy — retrying…");
+    }
+    // Permanently rejected (expired, replaced by another tab, invalid): start over.
+    store.remove(K.pending);
+    resetView();
+    nextStartAt = Date.now();
+    setStatus(res.error === "replaced by a newer view on this device"
+      ? "This view was replaced by one in another tab or window."
+      : "This view couldn't be counted (" + res.error + "). Keep watching to try again.");
+  }
+
+  function scheduleFinishRetry(ticket, delay, msg) {
+    setStatus(msg);
+    clearTimeout(finishTimer);
+    finishTimer = setTimeout(() => {
+      if (state === "finishing" && ticket === session) sendFinish(ticket, Math.min(delay * 2, 60000));
+    }, delay);
+  }
+
+  // A view that qualified but whose "finish" never got through (e.g. the page was closed).
+  function resumePendingFinish() {
+    const p = store.get(K.pending, null);
+    if (!p || typeof p.session !== "string") return;
+    session = p.session;
+    sessionTown = p.town;
+    state = "finishing";
+    sendFinish(p.session, 5000);
+  }
+
+  // ---------- Cloudflare Turnstile ----------
+  let tsReady = null, tsWidget = null, tsWaiting = null;
+  function loadTurnstile() {
+    tsReady = new Promise((resolve, reject) => {
+      window.onTurnstileLoad = resolve;
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad";
+      s.async = true;
+      s.onerror = () => reject(new Error("bot check couldn't load"));
+      document.head.appendChild(s);
+    });
+    tsReady.catch(() => {});
+  }
+  function getTurnstileToken() {
+    return tsReady.then(() => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => { tsWaiting = null; reject(new Error("bot check timed out")); }, 120000);
+      tsWaiting = {
+        resolve: t => { clearTimeout(timeout); tsWaiting = null; resolve(t); },
+        reject: e => { clearTimeout(timeout); tsWaiting = null; reject(e); },
+      };
+      if (tsWidget === null) {
+        tsWidget = turnstile.render(el.botCheck, {
+          sitekey: CFG.TURNSTILE_SITE_KEY,
+          action: "start",
+          appearance: "interaction-only",
+          execution: "execute",
+          callback: t => tsWaiting && tsWaiting.resolve(t),
+          "error-callback": () => { tsWaiting && tsWaiting.reject(new Error("bot check error")); return true; },
+          "expired-callback": () => {},
+        });
+      } else {
+        turnstile.reset(tsWidget);
+      }
+      turnstile.execute(tsWidget);
+    }));
   }
 
   // ---------- YouTube player ----------
+  let playerRequested = false;
   function loadPlayer() {
-    if (playerLoaded) return;
-    playerLoaded = true;
+    if (playerRequested) return;
+    playerRequested = true;
     window.onYouTubeIframeAPIReady = () => {
       player = new YT.Player("player", {
-        videoId: VID,
+        videoId: server.videoId,
         playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
         events: {
-          onReady: () => {
-            const dur = player.getDuration();
-            if (dur && dur - 2 < required) required = Math.max(1, Math.floor(dur - 2));
-            renderProgress();
-          },
           onStateChange: e => {
-            if (e.data === YT.PlayerState.PLAYING) {
-              if (!counted() || !CFG.ONE_VIEW_PER_DEVICE) {
-                el.status.textContent = "Watching… keep it playing to count your view.";
-                el.status.className = "status";
-              }
-            } else if (e.data === YT.PlayerState.PAUSED && !counted()) {
-              el.status.textContent = "Paused — watch time only counts while playing.";
+            if (e.data === YT.PlayerState.ENDED && state === "done") {
+              resetView();             // replaying after the end starts a fresh view
+              setStatus("Press play to watch again — it counts as another view.");
+            } else if (e.data === YT.PlayerState.PAUSED && state === "active") {
+              setStatus("Paused — watch time only counts while playing.");
+            } else if (e.data === YT.PlayerState.PLAYING && state === "active") {
+              setStatus("Watching… keep it playing to count your view.");
             }
             tick();
           },
@@ -195,19 +316,7 @@
     setInterval(tick, 1000);
   }
 
-  document.addEventListener("visibilitychange", () => { lastTick = null; tick(); });
+  document.addEventListener("visibilitychange", tick);
 
-  // ---------- start ----------
-  refreshTownButton();
-  const c = counted();
-  if (c && CFG.ONE_VIEW_PER_DEVICE) { town = c.town; showWatch(); }
-  else if (town) showWatch();
-
-  // Retry a view that qualified earlier but failed to send.
-  const pending = store.get(K.pending, null);
-  if (pending && !(c && CFG.ONE_VIEW_PER_DEVICE)) {
-    town = pending.town || town;
-    watched = Math.max(watched, pending.seconds || required);
-    qualify();
-  }
+  init();
 })();

@@ -1,22 +1,28 @@
-// Shared helpers for the watch page and the stats page.
+// Shared helpers for the watch page and the results page.
 (function () {
   const CFG = window.TRACKER_CONFIG;
 
+  // localStorage with an in-memory fallback (some private/mobile modes block storage).
+  const memory = new Map();
   const store = {
     get(key, fallback) {
-      try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); }
-      catch (e) { return fallback; }
+      try {
+        const v = localStorage.getItem(key);
+        if (v !== null) return JSON.parse(v);
+      } catch (e) { /* blocked */ }
+      return memory.has(key) ? memory.get(key) : fallback;
     },
     set(key, value) {
-      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage blocked */ }
+      memory.set(key, value);
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* blocked */ }
     },
     remove(key) {
-      try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+      memory.delete(key);
+      try { localStorage.removeItem(key); } catch (e) { /* blocked */ }
     },
   };
 
-  const isDemo = !CFG.ENDPOINT_URL;
-  const DEMO_KEY = "tv_demo_views";
+  const configured = !!CFG.ENDPOINT_URL;
 
   function fmtTime(sec) {
     sec = Math.max(0, Math.floor(sec));
@@ -24,56 +30,34 @@
     return m + ":" + String(s).padStart(2, "0");
   }
 
-  // Send one qualified view. Resolves to the server's JSON reply.
-  async function sendView(record) {
-    if (isDemo) {
-      const all = store.get(DEMO_KEY, []);
-      if (!all.some(r => r.videoId === record.videoId && r.viewerId === record.viewerId)) {
-        all.push(Object.assign({ ts: new Date().toISOString() }, record));
-        store.set(DEMO_KEY, all);
+  // Talk to the Apps Script backend. Network problems throw an Error with .retry = true.
+  async function api(method, params, timeoutMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs || 20000);
+    try {
+      let res;
+      if (method === "GET") {
+        const qs = new URLSearchParams(Object.assign({}, params, { _: Date.now() }));
+        const sep = CFG.ENDPOINT_URL.includes("?") ? "&" : "?";
+        res = await fetch(CFG.ENDPOINT_URL + sep + qs, { signal: ctrl.signal });
+      } else {
+        // text/plain avoids a CORS preflight, which Apps Script can't answer.
+        res = await fetch(CFG.ENDPOINT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(params),
+          signal: ctrl.signal,
+        });
       }
-      return { ok: true, demo: true };
+      if (!res.ok) throw Object.assign(new Error("HTTP " + res.status), { retry: true });
+      return await res.json();
+    } catch (err) {
+      if (err.retry === undefined) err.retry = true; // network error / timeout
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    // text/plain avoids a CORS preflight, which Apps Script can't answer.
-    const res = await fetch(CFG.ENDPOINT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(record),
-    });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "Server rejected the view");
-    return json;
   }
 
-  // Fetch per-town totals: { ok, total, towns: [{town, count}], updated }
-  async function fetchStats(videoId) {
-    if (isDemo) {
-      const all = store.get(DEMO_KEY, []).filter(r => r.videoId === videoId);
-      return { ok: true, demo: true, total: all.length, towns: groupTowns(all), updated: new Date().toISOString() };
-    }
-    const url = CFG.ENDPOINT_URL + (CFG.ENDPOINT_URL.includes("?") ? "&" : "?") +
-      "video=" + encodeURIComponent(videoId) + "&_=" + Date.now();
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "Could not load stats");
-    return json;
-  }
-
-  // Same grouping rule as the Apps Script: case/spacing-insensitive.
-  function groupTowns(records) {
-    const map = new Map();
-    for (const r of records) {
-      const name = String(r.town || "").trim().replace(/\s+/g, " ");
-      if (!name) continue;
-      const key = name.toLowerCase();
-      const cur = map.get(key) || { town: name, count: 0 };
-      cur.count++;
-      map.set(key, cur);
-    }
-    return [...map.values()].sort((a, b) => b.count - a.count || a.town.localeCompare(b.town));
-  }
-
-  window.TV = { CFG, store, isDemo, fmtTime, sendView, fetchStats };
+  window.TV = { CFG, store, configured, fmtTime, api };
 })();

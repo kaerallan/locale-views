@@ -1,27 +1,31 @@
-// Stats page: per-town totals of qualified views.
+// Results page: per-town totals of verified views.
 (function () {
-  const { CFG, isDemo, fetchStats } = window.TV;
+  const { CFG, configured, api } = window.TV;
   const $ = id => document.getElementById(id);
 
-  if (isDemo) $("demoBanner").classList.remove("hidden");
-  $("rule").textContent = "A view counts after someone plays the video for at least " +
-    CFG.MIN_SECONDS + " seconds.";
+  if (!configured) {
+    $("notice").textContent = "This site isn't connected yet. The owner needs to set ENDPOINT_URL in config.js.";
+    $("notice").classList.remove("hidden");
+    $("rows").innerHTML = '<li class="empty">No data yet.</li>';
+    return;
+  }
 
   function render(data) {
     const towns = data.towns || [];
     const total = data.total || 0;
-    const max = towns.length ? towns[0].count : 0;
+    const max = towns.reduce((m, t) => Math.max(m, t.count), 0);
+    const withViews = towns.filter(t => t.count > 0);
 
+    $("rule").textContent = "A view counts after someone plays the video for at least " +
+      data.minSeconds + " seconds.";
     $("kTotal").textContent = total.toLocaleString();
-    $("kTowns").textContent = towns.length.toLocaleString();
-    $("kTop").textContent = towns.length ? towns[0].town : "–";
+    $("kTowns").textContent = withViews.length + " / " + towns.length;
+    $("kTop").textContent = withViews.length ? withViews[0].town : "–";
     $("kTop").title = $("kTop").textContent;
 
     const list = $("rows");
     list.innerHTML = "";
-    if (!towns.length) {
-      list.innerHTML = '<li class="empty">No counted views yet.</li>';
-    }
+    if (!towns.length) list.innerHTML = '<li class="empty">No towns configured.</li>';
     for (const t of towns) {
       const li = document.createElement("li");
       li.className = "row";
@@ -42,7 +46,9 @@
 
   async function load() {
     try {
-      render(await fetchStats(CFG.VIDEO_ID));
+      const data = await api("GET", { action: "stats" });
+      if (!data.ok) throw new Error(data.error || "stats failed");
+      render(data);
     } catch (err) {
       console.error(err);
       $("updated").innerHTML = '<span class="err">Couldn\'t load the latest numbers — retrying.</span>';
