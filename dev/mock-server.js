@@ -102,6 +102,10 @@ http.createServer((req, res) => {
     });
     return;
   }
+  if (url.pathname === "/__clearcache") { // test helper: simulate Google evicting the cache
+    cacheStore.clear();
+    res.writeHead(200); return res.end("cleared");
+  }
   if (url.pathname === "/__rows") { // test helper: what's in the sheet
     const s = sheets.get("Views");
     res.writeHead(200, { "Content-Type": "application/json" });

@@ -59,7 +59,6 @@ const TOWNS = [
 
 const SHEET_NAME = 'Views';
 const HEADERS = ['Timestamp', 'Town', 'Video ID', 'Session ID', 'Device ID', 'Seconds (server)', 'Device'];
-const COL_SESSION = 4;                 // column D
 const SESSION_MAX_AGE_MS = 6 * 3600 * 1000;
 const STATS_CACHE_SECONDS = 15;
 
@@ -128,22 +127,38 @@ function finish_(data) {
 
   const cache = CacheService.getScriptCache();
   if (cache.get('used_' + p.s)) return json_({ ok: true, duplicate: true, town: p.t });
-  const latest = cache.get('dev_' + p.d);
-  if (latest && latest !== p.s) return json_({ ok: false, error: 'replaced by a newer view on this device' });
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return json_({ ok: false, error: 'busy', retry: true });
   try {
+    // Fast path: a newer view was started on this device (cache can be evicted, so
+    // the durable check below is what actually guarantees the rule).
+    const latest = cache.get('dev_' + p.d);
+    if (latest && latest !== p.s) return json_({ ok: false, error: 'replaced by a newer view on this device' });
+
+    // Durable checks against the sheet itself. Tickets expire after SESSION_MAX_AGE_MS,
+    // so only rows newer than that can matter; rows are in time order, so scan from the
+    // bottom in chunks and stop at the first older row.
     const sheet = sheet_();
-    const last = sheet.getLastRow();
-    if (last > 1) {
-      const sids = sheet.getRange(2, COL_SESSION, last - 1, 1).getValues();
-      for (let i = sids.length - 1; i >= 0; i--) {
-        if (sids[i][0] === p.s) {
+    const cutoff = Date.now() - SESSION_MAX_AGE_MS - 60000;
+    let end = sheet.getLastRow();
+    scan:
+    while (end > 1) {
+      const start = Math.max(2, end - 499);
+      const rows = sheet.getRange(start, 1, end - start + 1, 5).getValues(); // A:E
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const ts = rows[i][0] instanceof Date ? rows[i][0].getTime() : Number(new Date(rows[i][0]));
+        if (ts < cutoff) break scan;
+        if (rows[i][3] === p.s) {                       // D: this ticket was already counted
           cache.put('used_' + p.s, '1', 21600);
           return json_({ ok: true, duplicate: true, town: p.t });
         }
+        if (rows[i][4] === p.d && ts > p.at) {          // E: same device finished a view
+          // after this one started => two overlapping views from one device.
+          return json_({ ok: false, error: 'replaced by a newer view on this device' });
+        }
       }
+      end = start - 1;
     }
     const device = data.mobile === true ? 'mobile' : 'desktop';
     // Leading apostrophe stores the value as plain text (it isn't part of the value).

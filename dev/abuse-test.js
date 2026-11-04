@@ -53,6 +53,16 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   r = await post({ action: "finish", session: s3.session });
   check("newest view on the device finishes after MIN_SECONDS", r.ok && !r.duplicate, r);
 
+  // 7b. Same stacking attack, but Google has evicted the cache in between
+  const s4 = await post({ action: "start", town: A, device: "attacker03" });
+  const s5 = await post({ action: "start", town: A, device: "attacker03" });
+  await sleep((MIN + 1) * 1000);
+  await fetch(BASE + "/__clearcache");
+  const f4 = await post({ action: "finish", session: s4.session });
+  const f5 = await post({ action: "finish", session: s5.session });
+  check("cache eviction can't let one device count two overlapping views",
+    [f4, f5].filter(x => x.ok && !x.duplicate).length === 1, { f4, f5 });
+
   // 8. Replay the same ticket many times
   const replays = await Promise.all(Array.from({ length: 10 }, () => post({ action: "finish", session: s3.session })));
   check("replaying a finished ticket adds nothing", replays.every(x => x.ok && x.duplicate), replays.find(x => !x.duplicate));
@@ -63,12 +73,17 @@ const b64 = s => Buffer.from(s).toString("base64").replace(/\+/g, "-").replace(/
   r = await post({ action: "start", town: A, device: "x".repeat(5000) });
   check("rejects oversized request", !r.ok, r);
 
+  // 9b. A device can count again once its previous view is done (a genuine replay)
+  const s6 = await post({ action: "start", town: A, device: "attacker03" });
+  r = await post({ action: "finish", session: s6.session });
+  check("a later replay on the same device is still allowed to start", s6.ok && r.error === "too early", r);
+
   // 10. Ticket from attacker01 (s1) is still valid if they really waited — that's a legit view
   r = await post({ action: "finish", session: s1.session });
   check("a real, waited-out view from another device counts", r.ok && !r.duplicate, r);
 
   const added = (await rows()) - before;
-  check("exactly 2 views were added in total", added === 2, { added });
+  check("exactly 3 views were added in total", added === 3, { added });
 
   const stats = await (await fetch(EXEC + "?action=stats")).json();
   check("stats never list unknown towns", stats.towns.every(t => cfg.towns.includes(t.town)), stats.towns);

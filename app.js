@@ -52,6 +52,8 @@
   let lastMark = null;          // performance.now() when counting last (re)started
   let nextStartAt = 0;          // backoff for failed starts
   let finishTimer = null;
+  let gen = 0;                  // bumps whenever a view is abandoned, so stale replies are ignored
+  let endedWhileFinishing = false;
 
   // ---------- load settings from the server ----------
   async function init() {
@@ -103,13 +105,17 @@
   el.changeTown.addEventListener("click", () => {
     if (player && player.pauseVideo) player.pauseVideo();
     accrue();
-    if (state !== "finishing") resetView();   // an unfinished view is abandoned
+    // An unfinished view is abandoned. A view that is already counted (or being
+    // counted) stays counted: changing town must not re-arm the same playthrough.
+    if (state === "idle" || state === "starting" || state === "active") resetView();
     el.stepWatch.classList.add("hidden");
     el.stepTown.classList.remove("hidden");
     refreshTownButton();
   });
 
   function resetView() {
+    gen++;
+    endedWhileFinishing = false;
     state = "idle";
     session = null;
     watched = 0;
@@ -155,10 +161,11 @@
   // ---------- start a view ----------
   async function startView() {
     state = "starting";
+    const myGen = gen;
     setStatus("Starting…");
     try {
       const res = await api("POST", { action: "start", town, device: deviceId });
-      if (state !== "starting") return;
+      if (myGen !== gen || state !== "starting") return; // abandoned meanwhile
       if (!res.ok) {
         if (res.error === "unknown town") { notice("The town list has changed — please refresh the page."); }
         throw Object.assign(new Error(res.error || "start failed"), { retry: true });
@@ -172,7 +179,7 @@
       setStatus("Watching… keep it playing to count your view.");
     } catch (err) {
       console.warn("Start failed:", err);
-      if (state !== "starting") return;
+      if (myGen !== gen || state !== "starting") return;
       state = "idle";
       nextStartAt = Date.now() + 8000;
       setStatus("Couldn't reach the server. Retrying…");
@@ -184,7 +191,7 @@
     if (state !== "active" && state !== "finishing") return;
     if (state === "active") {
       state = "finishing";
-      store.set(K.pending, { session, town: sessionTown });
+      addPending(session, sessionTown);
     }
     setStatus("Counting your view…");
     clearTimeout(finishTimer);
@@ -200,12 +207,14 @@
     }
     if (ticket !== session || state !== "finishing") return; // stale reply
     if (res.ok) {
-      store.remove(K.pending);
+      removePending(ticket);
+      const ended = endedWhileFinishing;
       state = "done";
       session = null;
       renderProgress();
       setStatus("✓ Your view from " + res.town + " has been counted. Thank you! " +
         "To count another view, watch it again after the video ends.", "ok");
+      if (ended) resetView();   // the video already ended, so a replay is a new view
       return;
     }
     if (res.retry || res.error === "too early") {
@@ -213,7 +222,7 @@
       return scheduleFinishRetry(ticket, wait, res.error === "too early" ? "Almost there…" : "Server busy — retrying…");
     }
     // Permanently rejected (expired, replaced by another tab, invalid): start over.
-    store.remove(K.pending);
+    removePending(ticket);
     resetView();
     nextStartAt = Date.now();
     setStatus(res.error === "replaced by a newer view on this device"
@@ -229,14 +238,42 @@
     }, delay);
   }
 
-  // A view that qualified but whose "finish" never got through (e.g. the page was closed).
+  // ---------- views that qualified but whose "finish" never got through ----------
+  // Kept as a list keyed by ticket, so recovering an old one never touches the current view.
+  function getPending() {
+    const list = store.get(K.pending, []);
+    return Array.isArray(list) ? list.filter(p => p && typeof p.session === "string") : [];
+  }
+  function addPending(ticket, t) {
+    const list = getPending().filter(p => p.session !== ticket);
+    list.push({ session: ticket, town: t });
+    store.set(K.pending, list.slice(-5));
+  }
+  function removePending(ticket) {
+    store.set(K.pending, getPending().filter(p => p.session !== ticket));
+  }
+
+  // Called on page load: resend earlier qualified views in the background.
+  // This never changes the state of the view on this page.
   function resumePendingFinish() {
-    const p = store.get(K.pending, null);
-    if (!p || typeof p.session !== "string") return;
-    session = p.session;
-    sessionTown = p.town;
-    state = "finishing";
-    sendFinish(p.session, 5000);
+    for (const p of getPending()) recoverPending(p, 5000);
+  }
+  async function recoverPending(p, delay) {
+    let res;
+    try {
+      res = await api("POST", { action: "finish", session: p.session, mobile: MOBILE });
+    } catch (err) {
+      return setTimeout(() => recoverPending(p, Math.min(delay * 2, 60000)), delay);
+    }
+    if (res.ok) {
+      removePending(p.session);
+      notice("✓ Your earlier view from " + res.town + " was counted.");
+      return;
+    }
+    if (res.retry || res.error === "too early") {
+      return setTimeout(() => recoverPending(p, Math.min(delay * 2, 60000)), res.retryInMs ? res.retryInMs + 500 : delay);
+    }
+    removePending(p.session); // expired / invalid: nothing more to do
   }
 
   // ---------- YouTube player ----------
@@ -253,6 +290,8 @@
             if (e.data === YT.PlayerState.ENDED && state === "done") {
               resetView();             // replaying after the end starts a fresh view
               setStatus("Press play to watch again — it counts as another view.");
+            } else if (e.data === YT.PlayerState.ENDED && state === "finishing") {
+              endedWhileFinishing = true; // re-arm as soon as this view is confirmed
             } else if (e.data === YT.PlayerState.PAUSED && state === "active") {
               setStatus("Paused — watch time only counts while playing.");
             } else if (e.data === YT.PlayerState.PLAYING && state === "active") {
