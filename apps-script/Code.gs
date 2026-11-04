@@ -17,9 +17,9 @@
  */
 
 // ===================== EDIT THESE =====================
-const VIDEO_ID = 'GsWHSUuBlJY';   // TEST: "True 18 minute randos" (18:00, unlisted, owner's channel)
+const VIDEO_ID = 'aeGGVeUmzWY';   // Esguerra Family | Turning Point | INCTV (38:04)
 // Seconds of real playback (server-timed) before a view counts on this site.
-const MIN_SECONDS = 15 * 60;   // 15 minutes
+const MIN_SECONDS = 30 * 60;   // 30 minutes
 const TOWNS = [
   'Bacnotan',
   'Balaoan',
