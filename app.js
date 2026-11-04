@@ -169,12 +169,28 @@
     return state === "active" && isPlaying() && document.visibilityState === "visible" &&
       !el.stepWatch.classList.contains("hidden");
   }
-  // Adds the time since the last mark (if we were counting), then re-marks.
-  // Called on every tick AND on every play/pause/visibility change, so no time is lost or invented.
+  function mediaTime() {
+    try { const t = player.getCurrentTime(); return typeof t === "number" && isFinite(t) ? t : null; }
+    catch (e) { return null; }
+  }
+  // Credits how much of the VIDEO actually played since the last mark — never more than the
+  // real time that passed (so 2x speed doesn't count double), and nothing for stalls,
+  // stutter, ads or seeking (a forward jump bigger than playback could explain is ignored).
+  // Called on every tick AND on every play/pause/visibility change.
+  let lastMedia = null;
   function accrue() {
     const now = performance.now();
-    if (lastMark !== null) watched += Math.min((now - lastMark) / 1000, 2);
-    lastMark = isCounting() ? now : null;
+    const t = isPlaying() ? mediaTime() : null;
+    if (lastMark !== null && lastMedia !== null && t !== null) {
+      const wall = (now - lastMark) / 1000;
+      const media = t - lastMedia;
+      const rate = (player.getPlaybackRate && player.getPlaybackRate()) || 1;
+      if (media > 0 && media <= wall * Math.max(rate, 1) + 1.5) {
+        watched += Math.min(media, wall, 2);
+      }
+    }
+    if (isCounting() && t !== null) { lastMark = now; lastMedia = t; }
+    else { lastMark = null; lastMedia = null; }
   }
 
   function required() { return server ? server.minSeconds : 30; }
